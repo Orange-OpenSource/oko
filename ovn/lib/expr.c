@@ -2580,7 +2580,7 @@ expr_matches_print(const struct hmap *matches, FILE *stream)
 
     const struct expr_match *m;
     HMAP_FOR_EACH (m, hmap_node, matches) {
-        char *s = match_to_string(&m->match, OFP_DEFAULT_PRIORITY);
+        char *s = match_to_string(&m->match, OFP_DEFAULT_PRIORITY, 0);
         fputs(s, stream);
         free(s);
 

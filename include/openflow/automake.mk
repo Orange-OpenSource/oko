@@ -3,6 +3,7 @@ openflowinclude_HEADERS = \
 	include/openflow/intel-ext.h \
 	include/openflow/netronome-ext.h \
 	include/openflow/nicira-ext.h \
+	include/openflow/orange-ext.h \
 	include/openflow/openflow-1.0.h \
 	include/openflow/openflow-1.1.h \
 	include/openflow/openflow-1.2.h \

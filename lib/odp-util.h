@@ -160,6 +160,8 @@ void odp_flow_format(const struct nlattr *key, size_t key_len,
                      const struct hmap *portno_names, struct ds *,
                      bool verbose);
 void odp_flow_key_format(const struct nlattr *, size_t, struct ds *);
+void odp_format_filter_prog_chain(const struct ovs_list *filter_prog_chain,
+                                  struct ds *ds);
 int odp_flow_from_string(const char *s,
                          const struct simap *port_names,
                          struct ofpbuf *, struct ofpbuf *);

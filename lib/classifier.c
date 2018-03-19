@@ -25,6 +25,11 @@
 #include "openvswitch/ofp-util.h"
 #include "packets.h"
 #include "util.h"
+#include "bpf.h"
+
+#include "openvswitch/vlog.h"
+
+VLOG_DEFINE_THIS_MODULE(classifier)
 
 struct trie_ctx;
 
@@ -117,7 +122,10 @@ static const struct cls_match *find_match_wc(const struct cls_subtable *,
                                              const struct flow *,
                                              struct trie_ctx *,
                                              unsigned int n_tries,
-                                             struct flow_wildcards *);
+                                             struct flow_wildcards *,
+                                             bpf_result *filter_prog_results,
+                                             struct ovs_list **filter_prog_chain,
+                                             int *last_fp_pos);
 static struct cls_match *find_equal(const struct cls_subtable *,
                                     const struct miniflow *, uint32_t hash);
 
@@ -165,10 +173,13 @@ static bool mask_prefix_bits_set(const struct flow_wildcards *,
 /* cls_rule. */
 
 static inline void
-cls_rule_init__(struct cls_rule *rule, unsigned int priority)
+cls_rule_init__(struct cls_rule *rule, unsigned int priority,
+                ovs_be16 fp_instance_id, struct ubpf_vm *vm)
 {
     rculist_init(&rule->node);
     *CONST_CAST(int *, &rule->priority) = priority;
+    *CONST_CAST(ovs_be16 *, &rule->fp_instance_id) = fp_instance_id;
+    rule->vm = vm;
     ovsrcu_init(&rule->cls_match, NULL);
 }
 
@@ -181,18 +192,20 @@ cls_rule_init__(struct cls_rule *rule, unsigned int priority)
  * Clients should not use priority INT_MIN.  (OpenFlow uses priorities between
  * 0 and UINT16_MAX, inclusive.) */
 void
-cls_rule_init(struct cls_rule *rule, const struct match *match, int priority)
+cls_rule_init(struct cls_rule *rule, const struct match *match, int priority,
+              ovs_be16 fp_instance_id, struct ubpf_vm *vm)
 {
-    cls_rule_init__(rule, priority);
+    cls_rule_init__(rule, priority, fp_instance_id, vm);
     minimatch_init(CONST_CAST(struct minimatch *, &rule->match), match);
 }
 
 /* Same as cls_rule_init() for initialization from a "struct minimatch". */
 void
 cls_rule_init_from_minimatch(struct cls_rule *rule,
-                             const struct minimatch *match, int priority)
+                             const struct minimatch *match, int priority,
+                             ovs_be16 fp_instance_id, struct ubpf_vm *vm)
 {
-    cls_rule_init__(rule, priority);
+    cls_rule_init__(rule, priority, fp_instance_id, vm);
     minimatch_clone(CONST_CAST(struct minimatch *, &rule->match), match);
 }
 
@@ -202,7 +215,7 @@ cls_rule_init_from_minimatch(struct cls_rule *rule,
 void
 cls_rule_clone(struct cls_rule *dst, const struct cls_rule *src)
 {
-    cls_rule_init__(dst, src->priority);
+    cls_rule_init__(dst, src->priority, src->fp_instance_id, src->vm);
     minimatch_clone(CONST_CAST(struct minimatch *, &dst->match), &src->match);
 }
 
@@ -214,7 +227,7 @@ cls_rule_clone(struct cls_rule *dst, const struct cls_rule *src)
 void
 cls_rule_move(struct cls_rule *dst, struct cls_rule *src)
 {
-    cls_rule_init__(dst, src->priority);
+    cls_rule_init__(dst, src->priority, src->fp_instance_id, src->vm);
     minimatch_move(CONST_CAST(struct minimatch *, &dst->match),
                    CONST_CAST(struct minimatch *, &src->match));
 }
@@ -259,19 +272,28 @@ cls_rule_set_conjunctions(struct cls_rule *cr,
 }
 
 
+inline static bool
+filter_prog_equal(const struct cls_rule *a, const struct cls_rule *b)
+{
+    return a->vm == b->vm
+           && (!a->vm || a->vm->filter_prog == b->vm->filter_prog);
+}
+
 /* Returns true if 'a' and 'b' match the same packets at the same priority,
  * false if they differ in some way. */
 bool
 cls_rule_equal(const struct cls_rule *a, const struct cls_rule *b)
 {
-    return a->priority == b->priority && minimatch_equal(&a->match, &b->match);
+    return a->priority == b->priority && filter_prog_equal(a, b)
+           && minimatch_equal(&a->match, &b->match);
 }
 
 /* Appends a string describing 'rule' to 's'. */
 void
 cls_rule_format(const struct cls_rule *rule, struct ds *s)
 {
-    minimatch_format(&rule->match, s, rule->priority);
+    const ovs_be16 filter_prog = rule->vm? rule->vm->filter_prog : 0;
+    minimatch_format(&rule->match, s, rule->priority, filter_prog);
 }
 
 /* Returns true if 'rule' matches every packet, false otherwise. */
@@ -931,7 +953,9 @@ free_conjunctive_matches(struct hmap *matches,
 static const struct cls_rule *
 classifier_lookup__(const struct classifier *cls, cls_version_t version,
                     struct flow *flow, struct flow_wildcards *wc,
-                    bool allow_conjunctive_matches)
+                    bool allow_conjunctive_matches,
+                    bpf_result *filter_prog_results,
+                    struct ovs_list **filter_prog_chain, int *last_fp_pos)
 {
     struct trie_ctx trie_ctx[CLS_MAX_TRIES];
     const struct cls_match *match;
@@ -967,7 +991,8 @@ classifier_lookup__(const struct classifier *cls, cls_version_t version,
         /* Skip subtables with no match, or where the match is lower-priority
          * than some certain match we've already found. */
         match = find_match_wc(subtable, version, flow, trie_ctx, cls->n_tries,
-                              wc);
+                              wc, filter_prog_results, filter_prog_chain,
+                              last_fp_pos);
         if (!match || match->priority <= hard_pri) {
             continue;
         }
@@ -1091,7 +1116,9 @@ classifier_lookup__(const struct classifier *cls, cls_version_t version,
                 const struct cls_rule *rule;
 
                 flow->conj_id = id;
-                rule = classifier_lookup__(cls, version, flow, wc, false);
+                rule = classifier_lookup__(cls, version, flow, wc, false,
+                                           filter_prog_results,
+                                           filter_prog_chain, last_fp_pos);
                 flow->conj_id = saved_conj_id;
 
                 if (rule) {
@@ -1144,6 +1171,33 @@ classifier_lookup__(const struct classifier *cls, cls_version_t version,
     return hard ? hard->cls_rule : NULL;
 }
 
+static bpf_result
+update_filter_prog_chain(struct ovs_list **filter_prog_chain,
+                         const ovs_be16 fp_instance_id, struct ubpf_vm *vm,
+                         const struct dp_packet *packet,
+                         bpf_result *hist_filter_progs,
+                         int *last_fp_pos)
+{
+    bpf_result res = BPF_UNKNOWN;
+    if (hist_filter_progs && OVS_LIKELY(packet)) {
+        res = run_filter_prog(fp_instance_id, vm, packet, hist_filter_progs);
+        filter_prog_chain_add(filter_prog_chain, fp_instance_id, vm, res);
+    } else {
+    /* We're simply checking that the datapath rule is still valid,
+     * we shouldn't actually execute filter programs here. */
+        struct filter_prog *fp;
+        if (last_fp_pos) {
+            (*last_fp_pos)++;
+            fp = filter_prog_chain_lookup(filter_prog_chain, fp_instance_id,
+                                          *last_fp_pos);
+            if (fp) {
+                res = fp->expected_result;
+            }
+        }
+    }
+    return res;
+}
+
 /* Finds and returns the highest-priority rule in 'cls' that matches 'flow' and
  * that is visible in 'version'.  Returns a null pointer if no rules in 'cls'
  * match 'flow'.  If multiple rules of equal priority match 'flow', returns one
@@ -1158,9 +1212,32 @@ classifier_lookup__(const struct classifier *cls, cls_version_t version,
  * Any changes are restored before returning. */
 const struct cls_rule *
 classifier_lookup(const struct classifier *cls, cls_version_t version,
-                  struct flow *flow, struct flow_wildcards *wc)
+                  struct flow *flow, struct flow_wildcards *wc,
+                  const struct dp_packet *packet,
+                  bpf_result *hist_filter_progs,
+                  struct ovs_list **filter_prog_chain, bool *fp_chain_changed,
+                  int *last_fp_pos)
 {
-    return classifier_lookup__(cls, version, flow, wc, true);
+    const struct cls_rule *cr = NULL;
+    bpf_result result = BPF_NO_MATCH;
+    do {
+        cr = classifier_lookup__(cls, version, flow, wc, true,
+                                 hist_filter_progs, filter_prog_chain,
+                                 last_fp_pos);
+        if (!cr || !cr->fp_instance_id) {
+            break;
+        }
+        result = update_filter_prog_chain(filter_prog_chain,
+                                          cr->fp_instance_id, cr->vm, packet,
+                                          hist_filter_progs, last_fp_pos);
+        if (result == BPF_UNKNOWN) {
+        /* The filter program wasn't found (meaning the rule wasn't found
+         * during the lookup). */
+            *fp_chain_changed = true;
+            return NULL;
+        }
+    } while(result == BPF_NO_MATCH);
+    return cr;
 }
 
 /* Finds and returns a rule in 'cls' with exactly the same priority and
@@ -1210,7 +1287,7 @@ classifier_find_match_exactly(const struct classifier *cls,
     const struct cls_rule *retval;
     struct cls_rule cr;
 
-    cls_rule_init(&cr, target, priority);
+    cls_rule_init(&cr, target, priority, 0, NULL);
     retval = classifier_find_rule_exactly(cls, &cr, version);
     cls_rule_destroy(&cr);
 
@@ -1618,9 +1695,12 @@ miniflow_and_mask_matches_flow(const struct miniflow *flow,
 
 static inline const struct cls_match *
 find_match(const struct cls_subtable *subtable, cls_version_t version,
-           const struct flow *flow, uint32_t hash)
+           const struct flow *flow, uint32_t hash,
+           bpf_result *fp_results,
+           struct ovs_list **filter_prog_chain, int *last_fp_pos)
 {
     const struct cls_match *head, *rule;
+    ovs_be16 fp_instance_id;
 
     CMAP_FOR_EACH_WITH_HASH (head, cmap_node, hash, &subtable->rules) {
         if (OVS_LIKELY(miniflow_and_mask_matches_flow(&head->flow,
@@ -1629,6 +1709,30 @@ find_match(const struct cls_subtable *subtable, cls_version_t version,
             /* Return highest priority rule that is visible. */
             CLS_MATCH_FOR_EACH (rule, head) {
                 if (OVS_LIKELY(cls_match_visible_in_version(rule, version))) {
+                    fp_instance_id = rule->cls_rule->fp_instance_id;
+                    if (fp_instance_id && fp_results) {
+                        if (fp_results[fp_instance_id] == BPF_NO_MATCH) {
+                            filter_prog_chain_add(filter_prog_chain,
+                                                  fp_instance_id,
+                                                  rule->cls_rule->vm,
+                                                  BPF_NO_MATCH);
+                            continue;
+                        }
+                    } else if (fp_instance_id && !fp_results
+                               && filter_prog_chain) {
+                    /* We're simply checking that the datapath rule is still
+                     * valid, we shouldn't actually execute filter programs
+                     * here. */
+                        struct filter_prog *fp;
+                        int fp_pos = last_fp_pos? *last_fp_pos : 0;
+                        fp = filter_prog_chain_lookup(filter_prog_chain,
+                                                      fp_instance_id,
+                                                      fp_pos);
+                        if (fp && fp->expected_result == BPF_NO_MATCH) {
+                            (*last_fp_pos)++;
+                            continue;
+                        }
+                    }
                     return rule;
                 }
             }
@@ -1641,11 +1745,14 @@ find_match(const struct cls_subtable *subtable, cls_version_t version,
 static const struct cls_match *
 find_match_wc(const struct cls_subtable *subtable, cls_version_t version,
               const struct flow *flow, struct trie_ctx trie_ctx[CLS_MAX_TRIES],
-              unsigned int n_tries, struct flow_wildcards *wc)
+              unsigned int n_tries, struct flow_wildcards *wc,
+              bpf_result *filter_prog_results,
+              struct ovs_list **filter_prog_chain, int *last_fp_pos)
 {
     if (OVS_UNLIKELY(!wc)) {
         return find_match(subtable, version, flow,
-                          flow_hash_in_minimask(flow, &subtable->mask, 0));
+                          flow_hash_in_minimask(flow, &subtable->mask, 0),
+                          filter_prog_results, filter_prog_chain, last_fp_pos);
     }
 
     uint32_t basis = 0, hash;
@@ -1682,7 +1789,8 @@ find_match_wc(const struct cls_subtable *subtable, cls_version_t version,
     hash = flow_hash_in_minimask_range(flow, &subtable->mask,
                                        subtable->index_maps[i],
                                        &mask_offset, &basis);
-    rule = find_match(subtable, version, flow, hash);
+    rule = find_match(subtable, version, flow, hash, filter_prog_results,
+                      filter_prog_chain, last_fp_pos);
     if (!rule && subtable->ports_mask_len) {
         /* The final stage had ports, but there was no match.  Instead of
          * unwildcarding all the ports bits, use the ports trie to figure out a

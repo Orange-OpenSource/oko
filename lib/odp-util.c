@@ -41,6 +41,7 @@
 #include "util.h"
 #include "uuid.h"
 #include "openvswitch/vlog.h"
+#include "bpf.h"
 
 VLOG_DEFINE_THIS_MODULE(odp_util);
 
@@ -3140,6 +3141,28 @@ odp_flow_key_format(const struct nlattr *key,
                     size_t key_len, struct ds *ds)
 {
     odp_flow_format(key, key_len, NULL, 0, NULL, ds, true);
+}
+
+/* Appends the filter program identifiers to 'ds'. */
+void
+odp_format_filter_prog_chain(const struct ovs_list *filter_prog_chain,
+                             struct ds *ds)
+{
+    if (filter_prog_chain) {
+        int i = 0;
+        struct filter_prog *fp;
+        LIST_FOR_EACH (fp, filter_prog_node, filter_prog_chain) {
+            bool res = fp->expected_result == BPF_MATCH? true : false;
+            if (i == 0) {
+                ds_put_format(ds, "filter_progs:%d=%d", fp->vm->filter_prog,
+                              res);
+            } else {
+                ds_put_format(ds, "->%d=%d", fp->vm->filter_prog, res);
+            }
+            i++;
+        }
+        ds_put_format(ds, ", ");
+    }
 }
 
 static bool

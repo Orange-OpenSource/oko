@@ -202,6 +202,7 @@ lswitch_handshake(struct lswitch *sw)
         struct ofputil_flow_mod fm = {
             .match = MATCH_CATCHALL_INITIALIZER,
             .priority = 0,
+            .filter_prog = 0,
             .table_id = 0,
             .command = OFPFC_ADD,
             .buffer_id = UINT32_MAX,
@@ -579,6 +580,7 @@ process_packet_in(struct lswitch *sw, const struct ofp_header *oh)
          * new flow. */
         struct ofputil_flow_mod fm = {
             .priority = 1, /* Must be > 0 because of table-miss flow entry. */
+            .filter_prog = 0,
             .table_id = 0xff,
             .command = OFPFC_ADD,
             .idle_timeout = sw->max_idle,

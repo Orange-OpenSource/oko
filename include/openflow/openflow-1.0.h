@@ -305,12 +305,14 @@ struct ofp10_flow_mod {
                                      matching entries to include this as an
                                      output port.  A value of OFPP_NONE
                                      indicates no restriction. */
+    ovs_be16 filter_prog;         /* Filter program ID. */
     ovs_be16 flags;               /* One of OFPFF_*. */
+    uint8_t pad[6];               /* Align to 64-bits. */
 
     /* Followed by OpenFlow actions whose length is inferred from the length
      * field in the OpenFlow header. */
 };
-OFP_ASSERT(sizeof(struct ofp10_flow_mod) == 64);
+OFP_ASSERT(sizeof(struct ofp10_flow_mod) == 72);
 
 /* Flow removed (datapath -> controller). */
 struct ofp10_flow_removed {
@@ -354,9 +356,10 @@ struct ofp10_flow_stats {
                                  beyond duration_sec. */
     ovs_be16 priority;        /* Priority of the entry. Only meaningful
                                  when this is not an exact-match entry. */
+    ovs_be16 filter_prog;     /* Filter program ID. */
     ovs_be16 idle_timeout;    /* Number of seconds idle before expiration. */
     ovs_be16 hard_timeout;    /* Number of seconds before expiration. */
-    uint8_t pad2[6];          /* Align to 64 bits. */
+    uint8_t pad2[4];          /* Align to 64 bits. */
     ovs_32aligned_be64 cookie;       /* Opaque controller-issued identifier. */
     ovs_32aligned_be64 packet_count; /* Number of packets in flow. */
     ovs_32aligned_be64 byte_count;   /* Number of bytes in flow. */

@@ -22,6 +22,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include "openvswitch/types.h"
+#include "openvswitch/list.h"
 
 struct nlattr;
 struct dp_packet;
@@ -29,7 +30,8 @@ struct pkt_metadata;
 struct dp_packet_batch;
 
 typedef void (*odp_execute_cb)(void *dp, struct dp_packet_batch *batch,
-                               const struct nlattr *action, bool may_steal);
+                               const struct nlattr *action, bool may_steal,
+                               struct ovs_list *fp_chain);
 
 /* Actions that need to be executed in the context of a datapath are handed
  * to 'dp_execute_action', if non-NULL.  Currently this is called only for
@@ -38,5 +40,6 @@ typedef void (*odp_execute_cb)(void *dp, struct dp_packet_batch *batch,
 void odp_execute_actions(void *dp, struct dp_packet_batch *batch,
                          bool steal,
                          const struct nlattr *actions, size_t actions_len,
+                         struct ovs_list *fp_chain,
                          odp_execute_cb dp_execute_action);
 #endif

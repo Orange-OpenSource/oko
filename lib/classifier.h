@@ -304,6 +304,8 @@
 #include "pvector.h"
 #include "rculist.h"
 #include "openvswitch/type-props.h"
+#include "dp-packet.h"
+#include "bpf.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -355,11 +357,19 @@ struct cls_conjunction {
 
 /* A rule to be inserted to the classifier. */
 struct cls_rule {
-    struct rculist node;          /* In struct cls_subtable 'rules_list'. */
-    const int priority;           /* Larger numbers are higher priorities. */
+    struct rculist node;           /* In struct cls_subtable 'rules_list'. */
+    const int priority;            /* Larger numbers are higher priorities. */
+    const ovs_be16 fp_instance_id; /* ID of the filter program instance
+                                    * (specific to a rule). */
+    struct ubpf_vm *vm;            /* uBPF VM to execute the filter program. */
     OVSRCU_TYPE(struct cls_match *) cls_match;  /* NULL if not in a
                                                  * classifier. */
-    const struct minimatch match; /* Matching rule. */
+    const struct minimatch match;  /* Matching rule. */
+};
+
+struct rule_list {
+    const struct cls_rule *rule;
+    struct ovs_list rule_list_node;
 };
 
 /* Constructor/destructor.  Must run single-threaded. */
@@ -371,9 +381,11 @@ bool classifier_set_prefix_fields(struct classifier *,
                                   const enum mf_field_id *trie_fields,
                                   unsigned int n_trie_fields);
 
-void cls_rule_init(struct cls_rule *, const struct match *, int priority);
+void cls_rule_init(struct cls_rule *, const struct match *, int priority,
+                   ovs_be16 filter_prog, struct ubpf_vm *vm);
 void cls_rule_init_from_minimatch(struct cls_rule *, const struct minimatch *,
-                                  int priority);
+                                  int priority, ovs_be16 filter_prog,
+                                  struct ubpf_vm *vm);
 void cls_rule_clone(struct cls_rule *, const struct cls_rule *);
 void cls_rule_move(struct cls_rule *dst, struct cls_rule *src);
 void cls_rule_destroy(struct cls_rule *);
@@ -401,7 +413,12 @@ static inline void classifier_publish(struct classifier *);
  * and each other. */
 const struct cls_rule *classifier_lookup(const struct classifier *,
                                          cls_version_t, struct flow *,
-                                         struct flow_wildcards *);
+                                         struct flow_wildcards *,
+                                         const struct dp_packet *,
+                                         bpf_result *hist_filter_progs,
+                                         struct ovs_list **filter_prog_chain,
+                                         bool *fp_chain_changed,
+                                         int *last_fp_pos);
 bool classifier_rule_overlaps(const struct classifier *,
                               const struct cls_rule *, cls_version_t);
 const struct cls_rule *classifier_find_rule_exactly(const struct classifier *,

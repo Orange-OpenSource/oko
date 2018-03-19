@@ -3350,17 +3350,22 @@ xlate_table_action(struct xlate_ctx *ctx, ofp_port_t in_port, uint8_t table_id,
                                            &ctx->xin->flow, ctx->wc,
                                            ctx->xin->resubmit_stats,
                                            &ctx->table_id, in_port,
-                                           may_packet_in, honor_table_miss);
+                                           may_packet_in, honor_table_miss,
+                                           ctx->xin->packet,
+                                           ctx->xin->hist_filter_progs,
+                                           ctx->xin->filter_prog_chain,
+                                           &ctx->xout->fp_chain_changed,
+                                           &ctx->xout->last_fp_pos);
 
         if (OVS_UNLIKELY(ctx->xin->resubmit_hook)) {
             ctx->xin->resubmit_hook(ctx->xin, rule, ctx->indentation + 1);
         }
 
         if (rule) {
-            /* Fill in the cache entry here instead of xlate_recursively
-             * to make the reference counting more explicit.  We take a
-             * reference in the lookups above if we are going to cache the
-             * rule. */
+            /* Fill in the cache entry and update statistics here instead of
+             * xlate_recursively  to make the reference counting more explicit.
+             * We take a reference in the lookups above if we are going to
+             * cache the rule. */
             if (ctx->xin->xcache) {
                 struct xc_entry *entry;
 
@@ -3687,7 +3692,8 @@ execute_controller_action(struct xlate_ctx *ctx, int len,
     packet = dp_packet_clone(ctx->xin->packet);
     packet_batch_init_packet(&batch, packet);
     odp_execute_actions(NULL, &batch, false,
-                        ctx->odp_actions->data, ctx->odp_actions->size, NULL);
+                        ctx->odp_actions->data, ctx->odp_actions->size, NULL,
+                        NULL);
 
     /* A packet sent by an action in a table-miss rule is considered an
      * explicit table miss.  OpenFlow before 1.3 doesn't have that concept so
@@ -5108,7 +5114,8 @@ xlate_in_init(struct xlate_in *xin, struct ofproto_dpif *ofproto,
               const struct flow *flow, ofp_port_t in_port,
               struct rule_dpif *rule, uint16_t tcp_flags,
               const struct dp_packet *packet, struct flow_wildcards *wc,
-              struct ofpbuf *odp_actions)
+              struct ovs_list **filter_prog_chain, struct ofpbuf *odp_actions,
+              bpf_result *hist_filter_progs)
 {
     xin->ofproto = ofproto;
     xin->flow = *flow;
@@ -5128,7 +5135,9 @@ xlate_in_init(struct xlate_in *xin, struct ofproto_dpif *ofproto,
     xin->depth = 0;
     xin->resubmits = 0;
     xin->wc = wc;
+    xin->filter_prog_chain = filter_prog_chain;
     xin->odp_actions = odp_actions;
+    xin->hist_filter_progs = hist_filter_progs;
 
     /* Do recirc lookup. */
     xin->frozen_state = NULL;
@@ -5362,6 +5371,8 @@ xlate_actions(struct xlate_in *xin, struct xlate_out *xout)
     *xout = (struct xlate_out) {
         .slow = 0,
         .recircs = RECIRC_REFS_EMPTY_INITIALIZER,
+        .fp_chain_changed = false,
+        .last_fp_pos = 0,
     };
 
     struct xlate_cfg *xcfg = ovsrcu_get(struct xlate_cfg *, &xcfgp);
@@ -5520,7 +5531,9 @@ xlate_actions(struct xlate_in *xin, struct xlate_out *xout)
         ctx.rule = rule_dpif_lookup_from_table(
             ctx.xbridge->ofproto, ctx.tables_version, flow, ctx.wc,
             ctx.xin->resubmit_stats, &ctx.table_id,
-            flow->in_port.ofp_port, true, true);
+            flow->in_port.ofp_port, true, true, ctx.xin->packet,
+            ctx.xin->hist_filter_progs, ctx.xin->filter_prog_chain,
+            &ctx.xout->fp_chain_changed, &ctx.xout->last_fp_pos);
         if (ctx.xin->resubmit_stats) {
             rule_dpif_credit_stats(ctx.rule, ctx.xin->resubmit_stats);
         }
@@ -5690,8 +5703,7 @@ exit:
 enum ofperr
 xlate_resume(struct ofproto_dpif *ofproto,
              const struct ofputil_packet_in_private *pin,
-             struct ofpbuf *odp_actions,
-             enum slow_path_reason *slow)
+             struct ofpbuf *odp_actions, enum slow_path_reason *slow)
 {
     struct dp_packet packet;
     dp_packet_use_const(&packet, pin->public.packet,
@@ -5702,7 +5714,7 @@ xlate_resume(struct ofproto_dpif *ofproto,
 
     struct xlate_in xin;
     xlate_in_init(&xin, ofproto, &flow, 0, NULL, ntohs(flow.tcp_flags),
-                  &packet, NULL, odp_actions);
+                  &packet, NULL, NULL, odp_actions, NULL);
 
     struct ofpact_note noop;
     ofpact_init_NOTE(&noop);

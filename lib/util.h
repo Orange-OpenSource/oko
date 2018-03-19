@@ -46,6 +46,13 @@ extern char *program_name;
 #endif
 
 
+typedef enum OVS_PACKED_ENUM {
+    BPF_UNKNOWN = 0,
+    BPF_MATCH,
+    BPF_NO_MATCH,
+} bpf_result;
+
+
 /* This system's cache line size, in bytes.
  * Being wrong hurts performance but not correctness. */
 #define CACHE_LINE_SIZE 64

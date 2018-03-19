@@ -96,6 +96,11 @@ struct ofproto {
     cls_version_t tables_version;  /* Controls which rules are visible to
                                     * table lookups. */
 
+    /* uBPF VMs indexed on their filter program ids. */
+    struct hmap ubpf_vms;
+    /* Array of filter program instance ids already used. 1 if already used. */
+    bool fp_instance_id_used[FILTER_PROG_CHAIN_MAX];
+
     /* Rules indexed on their cookie values, in all flow tables. */
     struct hindex cookies OVS_GUARDED_BY(ofproto_mutex);
     struct hmap learned_cookies OVS_GUARDED_BY(ofproto_mutex);
@@ -1804,7 +1809,8 @@ struct ofproto_port_mod {
 enum ofperr ofproto_flow_mod(struct ofproto *, struct ofproto_flow_mod *)
     OVS_EXCLUDED(ofproto_mutex);
 void ofproto_add_flow(struct ofproto *, const struct match *, int priority,
-                      const struct ofpact *ofpacts, size_t ofpacts_len)
+                      const struct ofpact *ofpacts,
+                      size_t ofpacts_len)
     OVS_EXCLUDED(ofproto_mutex);
 void ofproto_delete_flow(struct ofproto *, const struct match *, int priority)
     OVS_EXCLUDED(ofproto_mutex);

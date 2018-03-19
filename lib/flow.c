@@ -1219,7 +1219,7 @@ flow_format(struct ds *ds, const struct flow *flow)
         WC_UNMASK_FIELD(wc, metadata);
     }
 
-    match_format(&match, ds, OFP_DEFAULT_PRIORITY);
+    match_format(&match, ds, OFP_DEFAULT_PRIORITY, 0);
 }
 
 void

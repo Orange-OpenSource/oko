@@ -44,6 +44,7 @@
 #include "openvswitch/type-props.h"
 #include "openvswitch/vlog.h"
 #include "openflow/intel-ext.h"
+#include "openflow/orange-ext.h"
 #include "packets.h"
 #include "pktbuf.h"
 #include "random.h"
@@ -1595,6 +1596,7 @@ ofputil_decode_flow_mod(struct ofputil_flow_mod *fm,
 
         /* Translate the message. */
         fm->priority = ntohs(ofm->priority);
+        fm->filter_prog = ntohs(ofm->filter_prog);
         if (ofm->command == OFPFC_ADD
             || (oh->version == OFP11_VERSION
                 && (ofm->command == OFPFC_MODIFY ||
@@ -1666,6 +1668,7 @@ ofputil_decode_flow_mod(struct ofputil_flow_mod *fm,
 
             /* Translate the message. */
             command = ntohs(ofm->command);
+            fm->filter_prog = ntohs(ofm->filter_prog);
             fm->cookie = htonll(0);
             fm->cookie_mask = htonll(0);
             fm->new_cookie = ofm->cookie;
@@ -1696,6 +1699,7 @@ ofputil_decode_flow_mod(struct ofputil_flow_mod *fm,
                 return OFPERR_NXBRC_NXM_INVALID;
             }
             fm->priority = ntohs(nfm->priority);
+            fm->filter_prog = ntohs(nfm->filter_prog);
             fm->new_cookie = nfm->cookie;
             fm->idle_timeout = ntohs(nfm->idle_timeout);
             fm->hard_timeout = ntohs(nfm->hard_timeout);
@@ -1755,6 +1759,56 @@ ofputil_decode_flow_mod(struct ofputil_flow_mod *fm,
     return ofpacts_check_consistency(fm->ofpacts, fm->ofpacts_len,
                                      &fm->match.flow, max_port,
                                      fm->table_id, max_table, protocol);
+}
+
+enum ofperr
+ofputil_decode_load_filter_prog(struct ol_load_filter_prog *msg,
+                                char **elf_file, const struct ofp_header *oh)
+{
+    enum ofperr error = 0;
+
+    struct ofpbuf b = ofpbuf_const_initializer(oh, ntohs(oh->length));
+    enum ofpraw raw = ofpraw_pull_assert(&b);
+    if (raw != OFPRAW_NXT_LOAD_FILTER_PROG) {
+        return OFPERR_OFPBMC_BAD_TYPE;
+    }
+
+    struct ol_load_filter_prog *buffer = ofpbuf_pull(&b, sizeof buffer);
+
+    if (!buffer->file_len) {
+        VLOG_WARN_RL(&bad_ofmsg_rl, "size of filter program is null");
+        return OFPERR_OFPBMC_BAD_LEN;
+    }
+
+    msg->filter_prog = ntohs(buffer->filter_prog);
+    msg->file_len = ntohl(buffer->file_len);
+
+    *elf_file = ofpbuf_try_pull(&b, msg->file_len);
+    if (!*elf_file) {
+        VLOG_WARN_RL(&bad_ofmsg_rl, "size of filter program is incorrect"
+                     " (%"PRIu32")", msg->file_len);
+        return OFPERR_OFPBMC_BAD_LEN;
+    }
+
+    return error;
+}
+
+struct ofpbuf *
+ofputil_encode_load_filter_prog(enum ofp_version ofp_version,
+                                const ovs_be16 filter_prog, void* program,
+                                const size_t length)
+{
+    struct ofpbuf *request;
+    struct ol_load_filter_prog *msg;
+
+    request = ofpraw_alloc(OFPRAW_NXT_LOAD_FILTER_PROG, ofp_version, length);
+    ofpbuf_put_zeros(request, sizeof *msg);
+    msg = request->msg;
+    msg->filter_prog = htons(filter_prog);
+    msg->file_len = htonl(length);
+    ofpbuf_put(request, program, length);
+
+    return request;
 }
 
 static enum ofperr
@@ -2187,6 +2241,7 @@ ofputil_encode_flow_mod(const struct ofputil_flow_mod *fm,
         ofm->idle_timeout = htons(fm->idle_timeout);
         ofm->hard_timeout = htons(fm->hard_timeout);
         ofm->priority = htons(fm->priority);
+        ofm->filter_prog = htons(fm->filter_prog);
         ofm->buffer_id = htonl(fm->buffer_id);
         ofm->out_port = ofputil_port_to_ofp11(fm->out_port);
         ofm->out_group = htonl(fm->out_group);
@@ -2215,6 +2270,7 @@ ofputil_encode_flow_mod(const struct ofputil_flow_mod *fm,
         ofm->idle_timeout = htons(fm->idle_timeout);
         ofm->hard_timeout = htons(fm->hard_timeout);
         ofm->priority = htons(fm->priority);
+        ofm->filter_prog = htons(fm->filter_prog);
         ofm->buffer_id = htonl(fm->buffer_id);
         ofm->out_port = htons(ofp_to_u16(fm->out_port));
         ofm->flags = raw_flags;
@@ -2238,6 +2294,7 @@ ofputil_encode_flow_mod(const struct ofputil_flow_mod *fm,
         nfm->idle_timeout = htons(fm->idle_timeout);
         nfm->hard_timeout = htons(fm->hard_timeout);
         nfm->priority = htons(fm->priority);
+        nfm->filter_prog = htons(fm->filter_prog);
         nfm->buffer_id = htonl(fm->buffer_id);
         nfm->out_port = htons(ofp_to_u16(fm->out_port));
         nfm->flags = raw_flags;
@@ -2889,6 +2946,7 @@ ofputil_decode_flow_stats_reply(struct ofputil_flow_stats *fs,
         instructions_len = length - sizeof *ofs - padded_match_len;
 
         fs->priority = ntohs(ofs->priority);
+        fs->filter_prog = ntohs(ofs->filter_prog);
         fs->table_id = ofs->table_id;
         fs->duration_sec = ntohl(ofs->duration_sec);
         fs->duration_nsec = ntohl(ofs->duration_nsec);
@@ -2935,6 +2993,7 @@ ofputil_decode_flow_stats_reply(struct ofputil_flow_stats *fs,
         fs->cookie = get_32aligned_be64(&ofs->cookie);
         ofputil_match_from_ofp10_match(&ofs->match, &fs->match);
         fs->priority = ntohs(ofs->priority);
+        fs->filter_prog = ntohs(ofs->filter_prog);
         fs->table_id = ofs->table_id;
         fs->duration_sec = ntohl(ofs->duration_sec);
         fs->duration_nsec = ntohl(ofs->duration_nsec);
@@ -2974,6 +3033,7 @@ ofputil_decode_flow_stats_reply(struct ofputil_flow_stats *fs,
         fs->duration_sec = ntohl(nfs->duration_sec);
         fs->duration_nsec = ntohl(nfs->duration_nsec);
         fs->priority = ntohs(nfs->priority);
+        fs->filter_prog = ntohs(nfs->filter_prog);
         fs->idle_timeout = ntohs(nfs->idle_timeout);
         fs->hard_timeout = ntohs(nfs->hard_timeout);
         fs->importance = 0;
@@ -3042,6 +3102,7 @@ ofputil_append_flow_stats_reply(const struct ofputil_flow_stats *fs,
         ofs->duration_sec = htonl(fs->duration_sec);
         ofs->duration_nsec = htonl(fs->duration_nsec);
         ofs->priority = htons(fs->priority);
+        ofs->filter_prog = htons(fs->filter_prog);
         ofs->idle_timeout = htons(fs->idle_timeout);
         ofs->hard_timeout = htons(fs->hard_timeout);
         if (version >= OFP14_VERSION) {
@@ -3054,7 +3115,6 @@ ofputil_append_flow_stats_reply(const struct ofputil_flow_stats *fs,
         } else {
             ofs->flags = 0;
         }
-        memset(ofs->pad2, 0, sizeof ofs->pad2);
         ofs->cookie = fs->cookie;
         ofs->packet_count = htonll(unknown_to_zero(fs->packet_count));
         ofs->byte_count = htonll(unknown_to_zero(fs->byte_count));
@@ -3072,6 +3132,7 @@ ofputil_append_flow_stats_reply(const struct ofputil_flow_stats *fs,
         ofs->duration_sec = htonl(fs->duration_sec);
         ofs->duration_nsec = htonl(fs->duration_nsec);
         ofs->priority = htons(fs->priority);
+        ofs->filter_prog = htons(fs->filter_prog);
         ofs->idle_timeout = htons(fs->idle_timeout);
         ofs->hard_timeout = htons(fs->hard_timeout);
         memset(ofs->pad2, 0, sizeof ofs->pad2);
@@ -3107,6 +3168,8 @@ ofputil_append_flow_stats_reply(const struct ofputil_flow_stats *fs,
         nfs->cookie = fs->cookie;
         nfs->packet_count = htonll(fs->packet_count);
         nfs->byte_count = htonll(fs->byte_count);
+        nfs->filter_prog = htons(fs->filter_prog);
+        memset(nfs->pad2, 0, sizeof nfs->pad2);
     } else {
         OVS_NOT_REACHED();
     }
@@ -7307,13 +7370,13 @@ ofputil_normalize_match__(struct match *match, bool may_log)
     /* Log any changes. */
     if (!flow_wildcards_equal(&wc, &match->wc)) {
         bool log = may_log && !VLOG_DROP_INFO(&bad_ofmsg_rl);
-        char *pre = log ? match_to_string(match, OFP_DEFAULT_PRIORITY) : NULL;
+        char *pre = log ? match_to_string(match, OFP_DEFAULT_PRIORITY, 0) : NULL;
 
         match->wc = wc;
         match_zero_wildcarded_fields(match);
 
         if (log) {
-            char *post = match_to_string(match, OFP_DEFAULT_PRIORITY);
+            char *post = match_to_string(match, OFP_DEFAULT_PRIORITY, 0);
             VLOG_INFO("normalization changed ofp_match, details:");
             VLOG_INFO(" pre: %s", pre);
             VLOG_INFO("post: %s", post);
@@ -9947,6 +10010,7 @@ ofputil_is_bundlable(enum ofptype type)
     case OFPTYPE_IPFIX_BRIDGE_STATS_REPLY:
     case OFPTYPE_IPFIX_FLOW_STATS_REQUEST:
     case OFPTYPE_IPFIX_FLOW_STATS_REPLY:
+    case OFPTYPE_LOAD_FILTER_PROG:
         break;
     }
 

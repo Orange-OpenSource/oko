@@ -112,7 +112,8 @@ map_insert(odp_port_t port, struct eth_addr mac, struct in6_addr *addr,
     tnl_port_init_flow(&match.flow, mac, addr, nw_proto, tp_port);
 
     do {
-        cr = classifier_lookup(&cls, CLS_MAX_VERSION, &match.flow, NULL);
+        cr = classifier_lookup(&cls, CLS_MAX_VERSION, &match.flow, NULL, NULL,
+                               NULL, NULL, NULL, NULL);
         p = tnl_port_cast(cr);
         /* Try again if the rule was released before we get the reference. */
     } while (p && !ovs_refcount_try_ref_rcu(&p->ref_cnt));
@@ -139,7 +140,7 @@ map_insert(odp_port_t port, struct eth_addr mac, struct in6_addr *addr,
         match.wc.masks.vlan_tci = OVS_BE16_MAX;
         memset(&match.wc.masks.dl_dst, 0xff, sizeof (struct eth_addr));
 
-        cls_rule_init(&p->cr, &match, 0); /* Priority == 0. */
+        cls_rule_init(&p->cr, &match, 0, 0, NULL);
         ovs_refcount_init(&p->ref_cnt);
         ovs_strlcpy(p->dev_name, dev_name, sizeof p->dev_name);
 
@@ -235,7 +236,8 @@ map_delete(struct eth_addr mac, struct in6_addr *addr,
 
     tnl_port_init_flow(&flow, mac, addr, nw_proto, tp_port);
 
-    cr = classifier_lookup(&cls, CLS_MAX_VERSION, &flow, NULL);
+    cr = classifier_lookup(&cls, CLS_MAX_VERSION, &flow, NULL, NULL, NULL,
+                           NULL, NULL, NULL);
     tnl_port_unref(cr);
 }
 
@@ -288,7 +290,7 @@ odp_port_t
 tnl_port_map_lookup(struct flow *flow, struct flow_wildcards *wc)
 {
     const struct cls_rule *cr = classifier_lookup(&cls, CLS_MAX_VERSION, flow,
-                                                  wc);
+                                                  wc, NULL, NULL, NULL, NULL, NULL);
 
     return (cr) ? tnl_port_cast(cr)->portno : ODPP_NONE;
 }

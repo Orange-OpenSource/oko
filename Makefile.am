@@ -90,6 +90,7 @@ docs = \
 	OPENFLOW-1.1+.md \
 	PORTING.md \
 	README.md \
+	README-original.md \
 	README-lisp.md \
 	README-native-tunneling.md \
 	REPORTING-BUGS.md \
@@ -308,7 +309,7 @@ ALL_LOCAL += check-endian
 check-endian:
 	@if test -e $(srcdir)/.git && (git --version) >/dev/null 2>&1 && \
 	    (cd $(srcdir) && git --no-pager grep -l -E \
-             -e 'BIG_ENDIAN|LITTLE_ENDIAN' --and --not -e 'BYTE_ORDER' | \
+             -e '\b(BIG_ENDIAN|LITTLE_ENDIAN)\b' --and --not -e 'BYTE_ORDER' | \
 	    $(EGREP) -v '^datapath/'); \
          then \
 	    echo "See above for list of files that misuse LITTLE""_ENDIAN"; \

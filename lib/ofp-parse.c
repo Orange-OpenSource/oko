@@ -274,6 +274,7 @@ parse_ofp_str__(struct ofputil_flow_mod *fm, int command, char *string,
         F_TIMEOUT = 1 << 3,
         F_PRIORITY = 1 << 4,
         F_FLAGS = 1 << 5,
+        F_FILTER_PROG = 1 << 6,
     } fields;
     char *act_str = NULL;
     char *name, *value;
@@ -309,7 +310,7 @@ parse_ofp_str__(struct ofputil_flow_mod *fm, int command, char *string,
         break;
 
     case OFPFC_ADD:
-        fields = F_ACTIONS | F_TIMEOUT | F_PRIORITY | F_FLAGS | F_IMPORTANCE;
+        fields = F_ACTIONS | F_TIMEOUT | F_PRIORITY | F_FILTER_PROG | F_FLAGS | F_IMPORTANCE;
         break;
 
     case OFPFC_DELETE:
@@ -321,11 +322,11 @@ parse_ofp_str__(struct ofputil_flow_mod *fm, int command, char *string,
         break;
 
     case OFPFC_MODIFY:
-        fields = F_ACTIONS | F_TIMEOUT | F_PRIORITY | F_FLAGS;
+        fields = F_ACTIONS | F_TIMEOUT | F_PRIORITY | F_FILTER_PROG | F_FLAGS;
         break;
 
     case OFPFC_MODIFY_STRICT:
-        fields = F_ACTIONS | F_TIMEOUT | F_PRIORITY | F_FLAGS;
+        fields = F_ACTIONS | F_TIMEOUT | F_PRIORITY | F_FILTER_PROG | F_FLAGS;
         break;
 
     default:
@@ -335,6 +336,7 @@ parse_ofp_str__(struct ofputil_flow_mod *fm, int command, char *string,
     *fm = (struct ofputil_flow_mod) {
         .match = MATCH_CATCHALL_INITIALIZER,
         .priority = OFP_DEFAULT_PRIORITY,
+        .filter_prog = 0,
         .table_id = 0xff,
         .command = command,
         .buffer_id = UINT32_MAX,
@@ -408,6 +410,11 @@ parse_ofp_str__(struct ofputil_flow_mod *fm, int command, char *string,
 
                 error = str_to_u16(value, name, &priority);
                 fm->priority = priority;
+            } else if (fields & F_FILTER_PROG && !strcmp(name, "filter_prog")) {
+                uint16_t filter_prog = 0;
+
+                error = str_to_u16(value, name, &filter_prog);
+                fm->filter_prog = filter_prog;
             } else if (fields & F_TIMEOUT && !strcmp(name, "idle_timeout")) {
                 error = str_to_u16(value, name, &fm->idle_timeout);
             } else if (fields & F_TIMEOUT && !strcmp(name, "hard_timeout")) {

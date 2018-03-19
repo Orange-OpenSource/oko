@@ -439,7 +439,7 @@ compare_classifiers(struct classifier *cls, size_t n_invisible_rules,
         /* This assertion is here to suppress a GCC 4.9 array-bounds warning */
         ovs_assert(cls->n_tries <= CLS_MAX_TRIES);
 
-        cr0 = classifier_lookup(cls, version, &flow, &wc);
+        cr0 = classifier_lookup(cls, version, &flow, &wc, NULL, NULL, NULL, NULL, NULL);
         cr1 = tcls_lookup(tcls, &flow);
         assert((cr0 == NULL) == (cr1 == NULL));
         if (cr0 != NULL) {
@@ -452,7 +452,7 @@ compare_classifiers(struct classifier *cls, size_t n_invisible_rules,
             /* Make sure the rule should have been visible. */
             assert(cls_rule_visible_in_version(cr0, version));
         }
-        cr2 = classifier_lookup(cls, version, &flow, NULL);
+        cr2 = classifier_lookup(cls, version, &flow, NULL, NULL, NULL, NULL, NULL, NULL);
         assert(cr2 == cr0);
     }
 }
@@ -710,7 +710,7 @@ make_rule(int wc_fields, int priority, int value_pat)
     cls_rule_init(&rule->cls_rule, &match, wc_fields
                   ? (priority == INT_MIN ? priority + 1 :
                      priority == INT_MAX ? priority - 1 : priority)
-                  : 0);
+                  : 0, 0, NULL);
     return rule;
 }
 
@@ -1368,10 +1368,10 @@ lookup_classifier(void *aux_)
         if (aux->use_wc) {
             flow_wildcards_init_catchall(&wc);
             cr = classifier_lookup(aux->cls, version, &aux->lookup_flows[x],
-                                   &wc);
+                                   &wc, NULL, NULL, NULL, NULL, NULL);
         } else {
             cr = classifier_lookup(aux->cls, version, &aux->lookup_flows[x],
-                                   NULL);
+                                   NULL, NULL, NULL, NULL, NULL, NULL);
         }
         if (cr) {
             hits++;

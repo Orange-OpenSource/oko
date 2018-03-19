@@ -717,7 +717,7 @@ ovn_flow_to_string(const struct ovn_flow *f)
     struct ds s = DS_EMPTY_INITIALIZER;
     ds_put_format(&s, "table_id=%"PRIu8", ", f->table_id);
     ds_put_format(&s, "priority=%"PRIu16", ", f->priority);
-    match_format(&f->match, &s, OFP_DEFAULT_PRIORITY);
+    match_format(&f->match, &s, OFP_DEFAULT_PRIORITY, 0);
     ds_put_cstr(&s, ", actions=");
     ofpacts_format(f->ofpacts, f->ofpacts_len, &s);
     return ds_steal_cstr(&s);

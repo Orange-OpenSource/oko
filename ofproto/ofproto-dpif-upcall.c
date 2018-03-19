@@ -214,9 +214,11 @@ struct upcall {
 
     bool xout_initialized;         /* True if 'xout' must be uninitialized. */
     struct xlate_out xout;         /* Result of xlate_actions(). */
+    struct ovs_list *filter_prog_chain; /* Filter program chain. */
     struct ofpbuf odp_actions;     /* Datapath actions from xlate_actions(). */
     struct flow_wildcards wc;      /* Dependencies that megaflow must match. */
     struct ofpbuf put_actions;     /* Actions 'put' in the fastpath. */
+    bpf_result *hist_filter_progs; /* Filter programs already executed. */
 
     struct dpif_ipfix *ipfix;      /* IPFIX pointer or NULL. */
     struct dpif_sflow *sflow;      /* SFlow pointer or NULL. */
@@ -261,6 +263,8 @@ struct udpif_key {
     uint32_t hash;                 /* Pre-computed hash for 'key'. */
     unsigned pmd_id;               /* Datapath poll mode driver id. */
 
+    const struct ovs_list *filter_prog_chain; /* Filter program chain. */
+
     struct ovs_mutex mutex;                   /* Guards the following. */
     struct dpif_flow_stats stats OVS_GUARDED; /* Last known stats.*/
     long long int created OVS_GUARDED;        /* Estimate of creation time. */
@@ -296,7 +300,9 @@ static struct ovs_list all_udpifs = OVS_LIST_INITIALIZER(&all_udpifs);
 
 static size_t recv_upcalls(struct handler *);
 static int process_upcall(struct udpif *, struct upcall *,
-                          struct ofpbuf *odp_actions, struct flow_wildcards *);
+                          struct ovs_list **filter_prog_chain,
+                          struct ofpbuf *odp_actions, struct flow_wildcards *,
+                          bpf_result *hist_filter_progs);
 static void handle_upcalls(struct udpif *, struct upcall *, size_t n_upcalls);
 static void udpif_stop_threads(struct udpif *);
 static void udpif_start_threads(struct udpif *, size_t n_handlers,
@@ -328,6 +334,7 @@ static void upcall_unixctl_purge(struct unixctl_conn *conn, int argc,
                                  const char *argv[], void *aux);
 
 static struct udpif_key *ukey_create_from_upcall(struct upcall *,
+                                                 struct ovs_list *,
                                                  struct flow_wildcards *);
 static int ukey_create_from_dpif_flow(const struct udpif *,
                                       const struct dpif_flow *,
@@ -339,6 +346,7 @@ static bool ukey_install_finish(struct udpif_key *ukey, int error);
 static bool ukey_install(struct udpif *udpif, struct udpif_key *ukey);
 static struct udpif_key *ukey_lookup(struct udpif *udpif,
                                      const ovs_u128 *ufid,
+                                     const struct ovs_list *filter_prog_chain,
                                      const unsigned pmd_id);
 static int ukey_acquire(struct udpif *, const struct dpif_flow *,
                         struct udpif_key **result, int *error);
@@ -794,8 +802,9 @@ recv_upcalls(struct handler *handler)
         pkt_metadata_from_flow(&dupcall->packet.md, flow);
         flow_extract(&dupcall->packet, flow);
 
-        error = process_upcall(udpif, upcall,
-                               &upcall->odp_actions, &upcall->wc);
+        error = process_upcall(udpif, upcall, &upcall->filter_prog_chain,
+                               &upcall->odp_actions, &upcall->wc,
+                               upcall->hist_filter_progs);
         if (error) {
             goto cleanup;
         }
@@ -1048,7 +1057,8 @@ upcall_receive(struct upcall *upcall, const struct dpif_backer *backer,
 
 static void
 upcall_xlate(struct udpif *udpif, struct upcall *upcall,
-             struct ofpbuf *odp_actions, struct flow_wildcards *wc)
+            struct ovs_list **filter_prog_chain, struct ofpbuf *odp_actions,
+            struct flow_wildcards *wc, bpf_result *hist_filter_progs)
 {
     struct dpif_flow_stats stats;
     struct xlate_in xin;
@@ -1059,7 +1069,8 @@ upcall_xlate(struct udpif *udpif, struct upcall *upcall,
     stats.tcp_flags = ntohs(upcall->flow->tcp_flags);
 
     xlate_in_init(&xin, upcall->ofproto, upcall->flow, upcall->in_port, NULL,
-                  stats.tcp_flags, upcall->packet, wc, odp_actions);
+                  stats.tcp_flags, upcall->packet, wc, filter_prog_chain,
+                  odp_actions, hist_filter_progs);
 
     if (upcall->type == DPIF_UC_MISS) {
         xin.resubmit_stats = &stats;
@@ -1109,7 +1120,7 @@ upcall_xlate(struct udpif *udpif, struct upcall *upcall,
      * going to create new datapath flows for actual datapath misses, there is
      * no point in creating a ukey otherwise. */
     if (upcall->type == DPIF_UC_MISS) {
-        upcall->ukey = ukey_create_from_upcall(upcall, wc);
+        upcall->ukey = ukey_create_from_upcall(upcall, *filter_prog_chain, wc);
     }
 }
 
@@ -1136,8 +1147,10 @@ upcall_uninit(struct upcall *upcall)
 static int
 upcall_cb(const struct dp_packet *packet, const struct flow *flow, ovs_u128 *ufid,
           unsigned pmd_id, enum dpif_upcall_type type,
-          const struct nlattr *userdata, struct ofpbuf *actions,
-          struct flow_wildcards *wc, struct ofpbuf *put_actions, void *aux)
+          const struct nlattr *userdata, struct ovs_list **filter_prog_chain,
+          struct ofpbuf *actions, struct flow_wildcards *wc,
+          struct ofpbuf *put_actions, void *aux,
+          bpf_result *hist_filter_progs)
 {
     static struct vlog_rate_limit rl = VLOG_RATE_LIMIT_INIT(1, 1);
     struct udpif *udpif = aux;
@@ -1155,7 +1168,8 @@ upcall_cb(const struct dp_packet *packet, const struct flow *flow, ovs_u128 *ufi
         return error;
     }
 
-    error = process_upcall(udpif, &upcall, actions, wc);
+    error = process_upcall(udpif, &upcall, filter_prog_chain, actions, wc,
+                           hist_filter_progs);
     if (error) {
         goto out;
     }
@@ -1197,7 +1211,8 @@ out:
 
 static int
 process_upcall(struct udpif *udpif, struct upcall *upcall,
-               struct ofpbuf *odp_actions, struct flow_wildcards *wc)
+               struct ovs_list **filter_prog_chain, struct ofpbuf *odp_actions,
+               struct flow_wildcards *wc, bpf_result *hist_filter_progs)
 {
     const struct nlattr *userdata = upcall->userdata;
     const struct dp_packet *packet = upcall->packet;
@@ -1205,7 +1220,8 @@ process_upcall(struct udpif *udpif, struct upcall *upcall,
 
     switch (classify_upcall(upcall->type, userdata)) {
     case MISS_UPCALL:
-        upcall_xlate(udpif, upcall, odp_actions, wc);
+        upcall_xlate(udpif, upcall, filter_prog_chain, odp_actions, wc,
+                     hist_filter_progs);
         return 0;
 
     case SFLOW_UPCALL:
@@ -1228,7 +1244,7 @@ process_upcall(struct udpif *udpif, struct upcall *upcall,
             }
             if (actions_len == 0) {
                 /* Lookup actions in userspace cache. */
-                struct udpif_key *ukey = ukey_lookup(udpif, upcall->ufid,
+                struct udpif_key *ukey = ukey_lookup(udpif, upcall->ufid, NULL,
                                                      upcall->pmd_id);
                 if (ukey) {
                     ukey_get_actions(ukey, &actions, &actions_len);
@@ -1401,7 +1417,8 @@ get_ukey_hash(const ovs_u128 *ufid, const unsigned pmd_id)
 }
 
 static struct udpif_key *
-ukey_lookup(struct udpif *udpif, const ovs_u128 *ufid, const unsigned pmd_id)
+ukey_lookup(struct udpif *udpif, const ovs_u128 *ufid,
+            const struct ovs_list *filter_prog_chain, const unsigned pmd_id)
 {
     struct udpif_key *ukey;
     int idx = get_ukey_hash(ufid, pmd_id) % N_UMAPS;
@@ -1409,7 +1426,10 @@ ukey_lookup(struct udpif *udpif, const ovs_u128 *ufid, const unsigned pmd_id)
 
     CMAP_FOR_EACH_WITH_HASH (ukey, cmap_node,
                              get_ukey_hash(ufid, pmd_id), cmap) {
-        if (ovs_u128_equals(ukey->ufid, *ufid)) {
+        /* We don't need to compare the filter program chain.  We can simply
+         * compare the references as we're sure it's the same instance. */
+        if (ovs_u128_equals(ukey->ufid, *ufid)
+            && filter_prog_chain == ukey->filter_prog_chain) {
             return ukey;
         }
     }
@@ -1438,6 +1458,7 @@ static struct udpif_key *
 ukey_create__(const struct nlattr *key, size_t key_len,
               const struct nlattr *mask, size_t mask_len,
               bool ufid_present, const ovs_u128 *ufid,
+              const struct ovs_list *filter_prog_chain,
               const unsigned pmd_id, const struct ofpbuf *actions,
               uint64_t dump_seq, uint64_t reval_seq, long long int used,
               uint32_t key_recirc_id, struct xlate_out *xout)
@@ -1455,6 +1476,8 @@ ukey_create__(const struct nlattr *key, size_t key_len,
     ukey->ufid = *ufid;
     ukey->pmd_id = pmd_id;
     ukey->hash = get_ukey_hash(&ukey->ufid, pmd_id);
+
+    ukey->filter_prog_chain = filter_prog_chain;
 
     ovsrcu_init(&ukey->actions, NULL);
     ukey_set_actions(ukey, actions);
@@ -1479,7 +1502,9 @@ ukey_create__(const struct nlattr *key, size_t key_len,
 }
 
 static struct udpif_key *
-ukey_create_from_upcall(struct upcall *upcall, struct flow_wildcards *wc)
+ukey_create_from_upcall(struct upcall *upcall,
+                        struct ovs_list *filter_prog_chain,
+                        struct flow_wildcards *wc)
 {
     struct odputil_keybuf keystub, maskstub;
     struct ofpbuf keybuf, maskbuf;
@@ -1507,7 +1532,7 @@ ukey_create_from_upcall(struct upcall *upcall, struct flow_wildcards *wc)
     }
 
     return ukey_create__(keybuf.data, keybuf.size, maskbuf.data, maskbuf.size,
-                         true, upcall->ufid, upcall->pmd_id,
+                         true, upcall->ufid, filter_prog_chain, upcall->pmd_id,
                          &upcall->put_actions, upcall->dump_seq,
                          upcall->reval_seq, 0,
                          upcall->have_recirc_ref ? upcall->recirc->id : 0,
@@ -1563,8 +1588,9 @@ ukey_create_from_dpif_flow(const struct udpif *udpif,
     ofpbuf_use_const(&actions, &flow->actions, flow->actions_len);
     *ukey = ukey_create__(flow->key, flow->key_len,
                           flow->mask, flow->mask_len, flow->ufid_present,
-                          &flow->ufid, flow->pmd_id, &actions, dump_seq,
-                          reval_seq, flow->stats.used, 0, NULL);
+                          &flow->ufid, flow->filter_prog_chain, flow->pmd_id,
+                          &actions, dump_seq, reval_seq, flow->stats.used, 0,
+                          NULL);
 
     return 0;
 }
@@ -1585,7 +1611,8 @@ ukey_install_start(struct udpif *udpif, struct udpif_key *new_ukey)
     idx = new_ukey->hash % N_UMAPS;
     umap = &udpif->ukeys[idx];
     ovs_mutex_lock(&umap->mutex);
-    old_ukey = ukey_lookup(udpif, &new_ukey->ufid, new_ukey->pmd_id);
+    old_ukey = ukey_lookup(udpif, &new_ukey->ufid, new_ukey->filter_prog_chain,
+                           new_ukey->pmd_id);
     if (old_ukey) {
         /* Uncommon case: A ukey is already installed with the same UFID. */
         if (old_ukey->key_len == new_ukey->key_len
@@ -1667,7 +1694,8 @@ ukey_acquire(struct udpif *udpif, const struct dpif_flow *flow,
     struct udpif_key *ukey;
     int retval;
 
-    ukey = ukey_lookup(udpif, &flow->ufid, flow->pmd_id);
+    ukey = ukey_lookup(udpif, &flow->ufid, flow->filter_prog_chain,
+                       flow->pmd_id);
     if (ukey) {
         retval = ovs_mutex_trylock(&ukey->mutex);
     } else {
@@ -1849,8 +1877,11 @@ revalidate_ukey(struct udpif *udpif, struct udpif_key *ukey,
         ukey->xcache = xlate_cache_new();
     }
 
+    struct ovs_list *fp_chain = CONST_CAST(struct ovs_list *,
+                                                    ukey->filter_prog_chain);
     xlate_in_init(&xin, ofproto, &flow, ofp_in_port, NULL, push.tcp_flags,
-                  NULL, need_revalidate ? &wc : NULL, odp_actions);
+                  NULL, need_revalidate ? &wc : NULL, &fp_chain,
+                  odp_actions, NULL);
     if (push.n_packets) {
         xin.resubmit_stats = &push;
         xin.may_learn = true;
@@ -1882,6 +1913,15 @@ revalidate_ukey(struct udpif *udpif, struct udpif_key *ukey,
      * down.  Note that we do not know if the datapath has ignored any of the
      * wildcarded bits, so we may be overtly conservative here. */
     if (flow_wildcards_has_extra(&dp_mask, &wc)) {
+        goto exit;
+    }
+
+    /* The filter program chain did not match (new filter program, removed
+     * filter program, or new order with different priorities).  We need to
+     * remove the datapath flow to add it back afterwards. */
+    if (xout.fp_chain_changed ||
+        (!fp_chain && xout.last_fp_pos > 0) ||
+        (fp_chain && xout.last_fp_pos != ovs_list_size(fp_chain))) {
         goto exit;
     }
 
@@ -2002,6 +2042,7 @@ push_dp_ops(struct udpif *udpif, struct ukey_op *ops, size_t n_ops)
             ofp_port_t ofp_in_port;
             struct flow flow;
             int error;
+            struct ovs_list *filter_prog_chain = NULL;
 
             if (op->ukey) {
                 ovs_mutex_lock(&op->ukey->mutex);
@@ -2013,6 +2054,8 @@ push_dp_ops(struct udpif *udpif, struct ukey_op *ops, size_t n_ops)
                 ovs_mutex_unlock(&op->ukey->mutex);
                 key = op->ukey->key;
                 key_len = op->ukey->key_len;
+                filter_prog_chain = CONST_CAST(struct ovs_list *,
+                                               op->ukey->filter_prog_chain);
             }
 
             if (odp_flow_key_to_flow(key, key_len, &flow)
@@ -2026,7 +2069,8 @@ push_dp_ops(struct udpif *udpif, struct ukey_op *ops, size_t n_ops)
                 struct xlate_in xin;
 
                 xlate_in_init(&xin, ofproto, &flow, ofp_in_port, NULL,
-                              push->tcp_flags, NULL, NULL, NULL);
+                              push->tcp_flags, NULL, NULL, &filter_prog_chain,
+                              NULL, NULL);
                 xin.resubmit_stats = push->n_packets ? push : NULL;
                 xin.may_learn = push->n_packets > 0;
                 xlate_actions_for_side_effects(&xin);
@@ -2094,6 +2138,7 @@ revalidate(struct revalidator *revalidator)
 {
     uint64_t odp_actions_stub[1024 / 8];
     struct ofpbuf odp_actions = OFPBUF_STUB_INITIALIZER(odp_actions_stub);
+
 
     struct udpif *udpif = revalidator->udpif;
     struct dpif_flow_dump_thread *dump_thread;
@@ -2189,6 +2234,7 @@ revalidate(struct revalidator *revalidator)
 
             if (result != UKEY_KEEP) {
                 /* Takes ownership of 'recircs'. */
+                /* TODO: Do we need to pass it filter_prog? */
                 reval_op_init(&ops[n_ops++], result, udpif, ukey, &recircs,
                               &odp_actions);
             }

@@ -960,6 +960,7 @@ dpif_flow_put(struct dpif *dpif, enum dpif_flow_put_flags flags,
     op.u.flow_put.key_len = key_len;
     op.u.flow_put.mask = mask;
     op.u.flow_put.mask_len = mask_len;
+    op.u.flow_put.filter_prog_chain = NULL;
     op.u.flow_put.actions = actions;
     op.u.flow_put.actions_len = actions_len;
     op.u.flow_put.ufid = ufid;
@@ -1087,7 +1088,8 @@ struct dpif_execute_helper_aux {
  * meaningful. */
 static void
 dpif_execute_helper_cb(void *aux_, struct dp_packet_batch *packets_,
-                       const struct nlattr *action, bool may_steal OVS_UNUSED)
+                       const struct nlattr *action, bool may_steal OVS_UNUSED,
+                       struct ovs_list *fp_chain OVS_UNUSED)
 {
     struct dpif_execute_helper_aux *aux = aux_;
     int type = nl_attr_type(action);
@@ -1190,7 +1192,7 @@ dpif_execute_with_help(struct dpif *dpif, struct dpif_execute *execute)
 
     packet_batch_init_packet(&pb, execute->packet);
     odp_execute_actions(&aux, &pb, false, execute->actions,
-                        execute->actions_len, dpif_execute_helper_cb);
+                        execute->actions_len, NULL, dpif_execute_helper_cb);
     return aux.error;
 }
 

@@ -477,7 +477,7 @@ odp_execute_sample(void *dp, struct dp_packet *packet, bool steal,
 
     packet_batch_init_packet(&pb, packet);
     odp_execute_actions(dp, &pb, steal, nl_attr_get(subactions),
-                        nl_attr_get_size(subactions), dp_execute_action);
+                        nl_attr_get_size(subactions), NULL, dp_execute_action);
 }
 
 static bool
@@ -517,6 +517,7 @@ requires_datapath_assistance(const struct nlattr *a)
 void
 odp_execute_actions(void *dp, struct dp_packet_batch *batch, bool steal,
                     const struct nlattr *actions, size_t actions_len,
+                    struct ovs_list *fp_chain,
                     odp_execute_cb dp_execute_action)
 {
     struct dp_packet **packets = batch->packets;
@@ -535,7 +536,7 @@ odp_execute_actions(void *dp, struct dp_packet_batch *batch, bool steal,
                  * not need it any more. */
                 bool may_steal = steal && last_action;
 
-                dp_execute_action(dp, batch, a, may_steal);
+                dp_execute_action(dp, batch, a, may_steal, fp_chain);
 
                 if (last_action) {
                     /* We do not need to free the packets. dp_execute_actions()

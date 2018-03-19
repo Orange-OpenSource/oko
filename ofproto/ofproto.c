@@ -37,6 +37,7 @@
 #include "ofproto.h"
 #include "ofproto-provider.h"
 #include "openflow/nicira-ext.h"
+#include "openflow/orange-ext.h"
 #include "openflow/openflow.h"
 #include "openvswitch/dynamic-string.h"
 #include "openvswitch/meta-flow.h"
@@ -558,6 +559,7 @@ ofproto_create(const char *datapath_name, const char *datapath_type,
     ofproto->tables = NULL;
     ofproto->n_tables = 0;
     ofproto->tables_version = CLS_MIN_VERSION;
+    hmap_init(&ofproto->ubpf_vms);
     hindex_init(&ofproto->cookies);
     hmap_init(&ofproto->learned_cookies);
     ovs_list_init(&ofproto->expirable);
@@ -1612,6 +1614,8 @@ ofproto_destroy__(struct ofproto *ofproto)
     }
     free(ofproto->tables);
 
+    ovs_assert(hmap_is_empty(&ofproto->ubpf_vms));
+
     ovs_assert(hindex_is_empty(&ofproto->cookies));
     hindex_destroy(&ofproto->cookies);
 
@@ -2125,8 +2129,8 @@ simple_flow_mod(struct ofproto *ofproto,
  * This is a helper function for in-band control and fail-open. */
 void
 ofproto_add_flow(struct ofproto *ofproto, const struct match *match,
-                 int priority,
-                 const struct ofpact *ofpacts, size_t ofpacts_len)
+                 int priority, const struct ofpact *ofpacts,
+                 size_t ofpacts_len)
     OVS_EXCLUDED(ofproto_mutex)
 {
     const struct rule *rule;
@@ -2214,8 +2218,8 @@ ofproto_flow_mod(struct ofproto *ofproto, struct ofproto_flow_mod *ofm)
  *
  * This is a helper function for in-band control and fail-open. */
 void
-ofproto_delete_flow(struct ofproto *ofproto,
-                    const struct match *target, int priority)
+ofproto_delete_flow(struct ofproto *ofproto, const struct match *target,
+                    int priority)
     OVS_EXCLUDED(ofproto_mutex)
 {
     struct classifier *cls = &ofproto->tables[0].cls;
@@ -3848,6 +3852,48 @@ handle_port_desc_stats_request(struct ofconn *ofconn,
 }
 
 static uint32_t
+hash_filter_prog(const ovs_be16 filter_prog)
+{
+    return hash_bytes(&filter_prog, 2, 0);
+}
+
+static void
+ubpf_vms_insert(struct ofproto *ofproto, struct ubpf_vm *vm)
+    OVS_REQUIRES(ofproto_mutex)
+{
+    hmap_insert(&ofproto->ubpf_vms, &vm->hmap_node,
+                hash_filter_prog(vm->filter_prog));
+}
+
+static struct ubpf_vm *
+ubpf_vms_lookup(struct ofproto *ofproto, const ovs_be16 filter_prog)
+    OVS_REQUIRES(ofproto_mutex)
+{
+    struct ubpf_vm *vm = NULL;
+    uint32_t hash = hash_filter_prog(filter_prog);
+    HMAP_FOR_EACH_WITH_HASH (vm, hmap_node, hash, &ofproto->ubpf_vms) {
+        if (vm->filter_prog == filter_prog) {
+            return vm;
+        }
+    }
+    return NULL;
+}
+
+static ovs_be16
+assign_fp_instance_id(struct ofproto *ofproto)
+    OVS_REQUIRES(ofproto_mutex)
+{
+    int i = 1;
+    for(; i < FILTER_PROG_CHAIN_MAX; i++) {
+        if (!ofproto->fp_instance_id_used[i]) {
+            ofproto->fp_instance_id_used[i] = true;
+            return i;
+        }
+    }
+    return 0;
+}
+
+static uint32_t
 hash_cookie(ovs_be64 cookie)
 {
     return hash_uint64((OVS_FORCE uint64_t)cookie);
@@ -3959,7 +4005,7 @@ rule_criteria_init(struct rule_criteria *criteria, uint8_t table_id,
                    uint32_t out_group)
 {
     criteria->table_id = table_id;
-    cls_rule_init(&criteria->cr, match, priority);
+    cls_rule_init(&criteria->cr, match, priority, 0, NULL);
     criteria->version = version;
     criteria->cookie = cookie;
     criteria->cookie_mask = cookie_mask;
@@ -4308,6 +4354,7 @@ handle_flow_stats_request(struct ofconn *ofconn,
         fs.table_id = rule->table_id;
         calc_duration(created, now, &fs.duration_sec, &fs.duration_nsec);
         fs.priority = rule->cr.priority;
+        fs.filter_prog = rule->cr.vm? rule->cr.vm->filter_prog : 0;
         fs.idle_age = age_secs(now - used);
         fs.hard_age = age_secs(now - modified);
         fs.ofpacts = actions->ofpacts;
@@ -4712,7 +4759,24 @@ add_flow_start(struct ofproto *ofproto, struct ofproto_flow_mod *ofm)
         return OFPERR_OFPBRC_EPERM;
     }
 
-    cls_rule_init(&cr, &fm->match, fm->priority);
+    struct ubpf_vm *vm = NULL;
+    ovs_be16 fp_instance_id = 0;
+    if (fm->filter_prog) {
+        vm = ubpf_vms_lookup(ofproto, fm->filter_prog);
+        if (!vm) {
+            VLOG_WARN_RL(&rl,
+                         "The referenced filter program could not be found.");
+            return OFPERR_OFPBRC_EPERM;
+        }
+        fp_instance_id = assign_fp_instance_id(ofproto);
+        if (!fp_instance_id) {
+            VLOG_WARN_RL(&rl, "Cannot instantiate a new stateful rule"
+                         "as you already have the maximum number of rules with"
+                         "filter programs (%d)", FILTER_PROG_CHAIN_MAX);
+            return OFPERR_OFPBRC_EPERM;
+        }
+    }
+    cls_rule_init(&cr, &fm->match, fm->priority, fp_instance_id, vm);
 
     /* Check for the existence of an identical rule.
      * This will not return rules earlier marked for removal. */
@@ -5200,6 +5264,11 @@ delete_flows_finish__(struct ofproto *ofproto,
             ofproto_rule_remove__(ofproto, rule);
             learned_cookies_dec(ofproto, rule_get_actions(rule),
                                 &dead_cookies);
+
+            /* Free ids for filter program instances. */
+            if (rule->cr.fp_instance_id) {
+                ofproto->fp_instance_id_used[rule->cr.fp_instance_id] = false;
+            }
         }
         rule_collection_remove_postponed(rules);
 
@@ -5452,6 +5521,38 @@ handle_flow_mod__(struct ofproto *ofproto, struct ofproto_flow_mod *ofm,
 }
 
 static enum ofperr
+handle_load_filter_prog(struct ofconn *ofconn, const struct ofp_header *oh)
+    OVS_EXCLUDED(ofproto_mutex)
+{
+    struct ofproto *ofproto = ofconn_get_ofproto(ofconn);
+    enum ofperr error;
+
+    error = reject_slave_controller(ofconn);
+    if (error) {
+        return error;
+    }
+
+    struct ol_load_filter_prog msg;
+    char *elf_file = NULL;
+    error = ofputil_decode_load_filter_prog(&msg, &elf_file, oh);
+    if (error) {
+        return error;
+    }
+
+    struct ubpf_vm *vm = create_ubpf_vm(msg.filter_prog);
+    if (!load_filter_prog(vm, msg.file_len, elf_file)) {
+        /* Not sure what else to return if the ELF file is malformed. */
+        ubpf_destroy(vm);
+        return OFPERR_OFPBRC_EPERM;
+    }
+    ovs_mutex_lock(&ofproto_mutex);
+    ubpf_vms_insert(ofproto, vm);
+    ovs_mutex_unlock(&ofproto_mutex);
+
+    return error;
+}
+
+static enum ofperr
 handle_role_request(struct ofconn *ofconn, const struct ofp_header *oh)
 {
     struct ofputil_role_request request;
@@ -5685,7 +5786,7 @@ ofproto_collect_ofmonitor_refresh_rules(const struct ofmonitor *m,
     const struct oftable *table;
     struct cls_rule target;
 
-    cls_rule_init_from_minimatch(&target, &m->match, 0);
+    cls_rule_init_from_minimatch(&target, &m->match, 0, 0, NULL);
     FOR_EACH_MATCHING_TABLE (table, m->table_id, ofproto) {
         struct rule *rule;
 
@@ -7332,6 +7433,9 @@ handle_openflow__(struct ofconn *ofconn, const struct ofpbuf *msg)
 
     case OFPTYPE_FLOW_MOD:
         return handle_flow_mod(ofconn, oh);
+
+    case OFPTYPE_LOAD_FILTER_PROG:
+        return handle_load_filter_prog(ofconn, oh);
 
     case OFPTYPE_GROUP_MOD:
         return handle_group_mod(ofconn, oh);

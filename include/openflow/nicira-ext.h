@@ -643,9 +643,10 @@ struct nx_flow_mod {
                                      matching entries to include this as an
                                      output port.  A value of OFPP_NONE
                                      indicates no restriction. */
+    ovs_be16 filter_prog;         /* Filter program ID. */
     ovs_be16 flags;               /* One of OFPFF_*. */
     ovs_be16 match_len;           /* Size of nx_match. */
-    uint8_t pad[6];               /* Align to 64-bits. */
+    uint8_t pad[4];               /* Align to 64-bits. */
     /* Followed by:
      *   - Exactly match_len (possibly 0) bytes containing the nx_match, then
      *   - Exactly (match_len + 7)/8*8 - match_len (between 0 and 7) bytes of
@@ -743,6 +744,8 @@ struct nx_flow_stats {
     ovs_be64 cookie;          /* Opaque controller-issued identifier. */
     ovs_be64 packet_count;    /* Number of packets, UINT64_MAX if unknown. */
     ovs_be64 byte_count;      /* Number of bytes, UINT64_MAX if unknown. */
+    ovs_be16 filter_prog;     /* Filter program ID. */
+    uint8_t pad2[6];           /* Align to 64-bits. */
     /* Followed by:
      *   - Exactly match_len (possibly 0) bytes containing the nx_match, then
      *   - Exactly (match_len + 7)/8*8 - match_len (between 0 and 7) bytes of
@@ -751,7 +754,7 @@ struct nx_flow_stats {
      *     of 8).
      */
 };
-OFP_ASSERT(sizeof(struct nx_flow_stats) == 48);
+OFP_ASSERT(sizeof(struct nx_flow_stats) == 56);
 
 /* Nicira vendor stats request of type NXST_AGGREGATE (analogous to
  * OFPST_AGGREGATE request).

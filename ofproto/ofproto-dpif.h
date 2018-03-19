@@ -26,6 +26,7 @@
 #include "timer.h"
 #include "util.h"
 #include "ovs-thread.h"
+#include "bpf.h"
 
 /* Priority for internal rules created to handle recirculation */
 #define RECIRC_RULE_PRIORITY 20
@@ -109,7 +110,12 @@ struct rule_dpif *rule_dpif_lookup_from_table(struct ofproto_dpif *,
                                               uint8_t *table_id,
                                               ofp_port_t in_port,
                                               bool may_packet_in,
-                                              bool honor_table_miss);
+                                              bool honor_table_miss,
+                                              const struct dp_packet *packet,
+                                              bpf_result *hist_filter_progs,
+                                              struct ovs_list **filter_prog_chain,
+                                              bool *fp_chain_changed,
+                                              int *last_fp_pos);
 
 static inline void rule_dpif_ref(struct rule_dpif *);
 static inline void rule_dpif_unref(struct rule_dpif *);
@@ -121,6 +127,8 @@ static inline bool rule_dpif_is_fail_open(const struct rule_dpif *);
 static inline bool rule_dpif_is_table_miss(const struct rule_dpif *);
 static inline bool rule_dpif_is_internal(const struct rule_dpif *);
 
+struct rule_dpif *rule_dpif_from_cls_rule(const struct cls_rule *rule);
+
 uint8_t rule_dpif_get_table(const struct rule_dpif *);
 
 bool table_is_internal(uint8_t table_id);
@@ -129,6 +137,8 @@ const struct rule_actions *rule_dpif_get_actions(const struct rule_dpif *);
 void rule_set_recirc_id(struct rule *, uint32_t id);
 
 ovs_be64 rule_dpif_get_flow_cookie(const struct rule_dpif *rule);
+bool rule_dpif_has_filter_prog(const struct rule_dpif *rule);
+struct ubpf_vm *rule_dpif_get_ubpf_vm(const struct rule_dpif *rule);
 
 void rule_dpif_reduce_timeouts(struct rule_dpif *rule, uint16_t idle_timeout,
                                uint16_t hard_timeout);
@@ -173,7 +183,8 @@ int ofproto_dpif_add_internal_flow(struct ofproto_dpif *,
                                    const struct match *, int priority,
                                    uint16_t idle_timeout,
                                    const struct ofpbuf *ofpacts,
-                                   struct rule **rulep);
+                                   struct rule **rulep,
+                                   const struct dp_packet *packet);
 int ofproto_dpif_delete_internal_flow(struct ofproto_dpif *, struct match *,
                                       int priority);
 
@@ -227,6 +238,8 @@ static inline bool rule_dpif_is_internal(const struct rule_dpif *rule)
 {
     return RULE_CAST(rule)->table_id == TBL_INTERNAL;
 }
+
+int get_priority(struct rule_dpif *rule);
 
 #undef RULE_CAST
 

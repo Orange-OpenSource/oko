@@ -2863,7 +2863,7 @@ fte_insert(struct flow_tables *tables, const struct match *match,
     struct fte *old, *fte;
 
     fte = xzalloc(sizeof *fte);
-    cls_rule_init(&fte->rule, match, priority);
+    cls_rule_init(&fte->rule, match, priority, 0, NULL);
     fte->versions[index] = version;
 
     old = fte_from_cls_rule(classifier_replace(cls, &fte->rule,
@@ -3039,8 +3039,14 @@ fte_make_flow_mod(const struct fte *fte, int index, uint16_t command,
     const struct fte_version *version = fte->versions[index];
     struct ofpbuf *ofm;
 
+    ovs_be16 filter_prog = 0;
+    if (fte->rule.vm) {
+        filter_prog = fte->rule.vm->filter_prog;
+    }
+
     struct ofputil_flow_mod fm = {
         .priority = fte->rule.priority,
+        .filter_prog = filter_prog,
         .new_cookie = version->cookie,
         .modify_cookie = true,
         .table_id = version->table_id,
@@ -3790,7 +3796,7 @@ ofctl_check_vlan(struct ovs_cmdl_context *ctx)
     match.wc.masks.vlan_tci = htons(strtoul(ctx->argv[2], NULL, 16));
 
     /* Convert to and from string. */
-    string_s = match_to_string(&match, OFP_DEFAULT_PRIORITY);
+    string_s = match_to_string(&match, OFP_DEFAULT_PRIORITY, 0);
     printf("%s -> ", string_s);
     fflush(stdout);
     error_s = parse_ofp_str(&fm, -1, string_s, &usable_protocols);
@@ -4000,6 +4006,54 @@ ofctl_parse_key_value(struct ovs_cmdl_context *ctx)
     }
 }
 
+static void
+ofctl_load_filter_prog(struct ovs_cmdl_context *ctx)
+{
+    struct ofpbuf *request;
+    struct vconn *vconn;
+    enum ofputil_protocol protocol;
+    enum ofputil_protocol usable_protocols = OFPUTIL_P_OF13_UP | OFPUTIL_P_OF10_NXM;
+    enum ofp_version version;
+    const char *bridge = ctx->argv[1];
+    const ovs_be16 filter_prog = atoi(ctx->argv[2]);
+    const char *filename = ctx->argv[3];
+    size_t length;
+
+    FILE *stream = !strcmp(filename, "-") ? stdin : fopen(filename, "r");
+    if (stream == NULL) {
+        ovs_fatal(0, "%s: open failed", filename);
+    }
+
+    if (stream == stdin) {
+        if (ctx->argc < 5) {
+            ovs_fatal(0, "length required when reading from stdin");
+        }
+        length = atoi(ctx->argv[4]);
+    } else {
+        fseek(stream, 0L, SEEK_END);
+        length = ftell(stream);
+        fseek(stream, 0L, SEEK_SET);
+    }
+
+    char program[length];
+    size_t actual_length = fread(program, sizeof(char), length, stream);
+    if (actual_length < length) {
+        ovs_fatal(0, "filter program was shorter than announced");
+    }
+
+    if (stream != stdin) {
+        fclose(stream);
+    }
+
+    protocol = open_vconn_for_flow_mod(bridge, &vconn, usable_protocols);
+    version = ofputil_protocol_to_ofp_version(protocol);
+    request = ofputil_encode_load_filter_prog(version, filter_prog, program,
+                                              length);
+
+    transact_noreply(vconn, request);
+    vconn_close(vconn);
+}
+
 static const struct ovs_cmdl_command all_commands[] = {
     { "show", "switch",
       1, 1, ofctl_show },
@@ -4126,6 +4180,8 @@ static const struct ovs_cmdl_command all_commands[] = {
     { "ofp-print", NULL, 1, 2, ofctl_ofp_print },
     { "encode-hello", NULL, 1, 1, ofctl_encode_hello },
     { "parse-key-value", NULL, 1, INT_MAX, ofctl_parse_key_value },
+
+    { "load-filter-prog", "id file [length]", 2, 3, ofctl_load_filter_prog },
 
     { NULL, NULL, 0, 0, NULL },
 };

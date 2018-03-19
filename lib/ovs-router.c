@@ -94,7 +94,8 @@ ovs_router_lookup(const struct in6_addr *ip6_dst, char output_bridge[],
     const struct cls_rule *cr;
     struct flow flow = {.ipv6_dst = *ip6_dst};
 
-    cr = classifier_lookup(&cls, CLS_MAX_VERSION, &flow, NULL);
+    cr = classifier_lookup(&cls, CLS_MAX_VERSION, &flow, NULL, NULL, NULL,
+                           NULL, NULL, NULL);
     if (cr) {
         struct ovs_router_entry *p = ovs_router_entry_cast(cr);
 
@@ -196,7 +197,7 @@ ovs_router_insert__(uint8_t priority, const struct in6_addr *ip6_dst,
         return err;
     }
     /* Longest prefix matches first. */
-    cls_rule_init(&p->cr, &match, priority);
+    cls_rule_init(&p->cr, &match, priority, 0, NULL);
 
     ovs_mutex_lock(&mutex);
     cr = classifier_replace(&cls, &p->cr, CLS_MIN_VERSION, NULL, 0);
@@ -244,7 +245,7 @@ rt_entry_delete(uint8_t priority, const struct in6_addr *ip6_dst, uint8_t plen)
 
     rt_init_match(&match, ip6_dst, plen);
 
-    cls_rule_init(&rule, &match, priority);
+    cls_rule_init(&rule, &match, priority, 0, NULL);
 
     /* Find the exact rule. */
     cr = classifier_find_rule_exactly(&cls, &rule, CLS_MAX_VERSION);

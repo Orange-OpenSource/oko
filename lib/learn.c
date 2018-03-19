@@ -94,6 +94,7 @@ learn_execute(const struct ofpact_learn *learn, const struct flow *flow,
 
     match_init_catchall(&fm->match);
     fm->priority = learn->priority;
+    fm->filter_prog = 0;
     fm->cookie = htonll(0);
     fm->cookie_mask = htonll(0);
     fm->new_cookie = learn->cookie;

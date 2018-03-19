@@ -356,10 +356,11 @@ update_recirc_rules(struct bond *bond)
             error = ofproto_dpif_add_internal_flow(bond->ofproto,
                                                    &pr_op->match,
                                                    RECIRC_RULE_PRIORITY, 0,
-                                                   &ofpacts, pr_op->pr_rule);
+                                                   &ofpacts, pr_op->pr_rule,
+                                                   NULL);
             if (error) {
                 char *err_s = match_to_string(&pr_op->match,
-                                              RECIRC_RULE_PRIORITY);
+                                              RECIRC_RULE_PRIORITY, 0);
 
                 VLOG_ERR("failed to add post recirculation flow %s", err_s);
                 free(err_s);
@@ -372,7 +373,7 @@ update_recirc_rules(struct bond *bond)
                                                       RECIRC_RULE_PRIORITY);
             if (error) {
                 char *err_s = match_to_string(&pr_op->match,
-                                              RECIRC_RULE_PRIORITY);
+                                              RECIRC_RULE_PRIORITY, 0);
 
                 VLOG_ERR("failed to remove post recirculation flow %s", err_s);
                 free(err_s);

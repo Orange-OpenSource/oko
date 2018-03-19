@@ -42,6 +42,10 @@ struct xlate_out {
 
     struct recirc_refs recircs; /* Recirc action IDs on which references are
                                  * held. */
+
+    bool fp_chain_changed;      /* Path through filter programs changed. */
+    int last_fp_pos;            /* Position in the fp chain of the last filter
+                                 * program checked. */
 };
 
 struct xlate_in {
@@ -66,6 +70,11 @@ struct xlate_in {
     /* The rule initiating translation or NULL. If both 'rule' and 'ofpacts'
      * are NULL, xlate_actions() will do the initial rule lookup itself. */
     struct rule_dpif *rule;
+
+    /* Filter program chain. */
+    struct ovs_list **filter_prog_chain;
+    /* Filter program already executed for this packet. */
+    bpf_result *hist_filter_progs;
 
     /* The actions to translate.  If 'rule' is not NULL, these may be NULL. */
     const struct ofpact *ofpacts;
@@ -203,7 +212,9 @@ enum xlate_error xlate_actions(struct xlate_in *, struct xlate_out *);
 void xlate_in_init(struct xlate_in *, struct ofproto_dpif *,
                    const struct flow *, ofp_port_t in_port, struct rule_dpif *,
                    uint16_t tcp_flags, const struct dp_packet *packet,
-                   struct flow_wildcards *, struct ofpbuf *odp_actions);
+                   struct flow_wildcards *, struct ovs_list **filter_prog_chain,
+                   struct ofpbuf *odp_actions,
+                   bpf_result *hist_filter_progs);
 void xlate_out_uninit(struct xlate_out *);
 void xlate_actions_for_side_effects(struct xlate_in *);
 

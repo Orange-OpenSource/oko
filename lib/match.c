@@ -1064,7 +1064,8 @@ format_ct_label_masked(struct ds *s, const ovs_u128 *key, const ovs_u128 *mask)
 /* Appends a string representation of 'match' to 's'.  If 'priority' is
  * different from OFP_DEFAULT_PRIORITY, includes it in 's'. */
 void
-match_format(const struct match *match, struct ds *s, int priority)
+match_format(const struct match *match, struct ds *s, int priority,
+             ovs_be16 filter_prog)
 {
     const struct flow_wildcards *wc = &match->wc;
     size_t start_len = s->length;
@@ -1080,6 +1081,11 @@ match_format(const struct match *match, struct ds *s, int priority)
     if (priority != OFP_DEFAULT_PRIORITY) {
         ds_put_format(s, "%spriority=%s%d,",
                       colors.special, colors.end, priority);
+    }
+
+    if (filter_prog) {
+        ds_put_format(s, "%sfilter_prog=%s%"PRIu16",",
+                      colors.special, colors.end, filter_prog);
     }
 
     format_uint32_masked(s, "pkt_mark", f->pkt_mark, wc->masks.pkt_mark);
@@ -1360,17 +1366,17 @@ match_format(const struct match *match, struct ds *s, int priority)
  * different from OFP_DEFAULT_PRIORITY, includes it in the string.  The caller
  * must free the string (with free()). */
 char *
-match_to_string(const struct match *match, int priority)
+match_to_string(const struct match *match, int priority, ovs_be16 filter_prog)
 {
     struct ds s = DS_EMPTY_INITIALIZER;
-    match_format(match, &s, priority);
+    match_format(match, &s, priority, filter_prog);
     return ds_steal_cstr(&s);
 }
 
 void
 match_print(const struct match *match)
 {
-    char *s = match_to_string(match, OFP_DEFAULT_PRIORITY);
+    char *s = match_to_string(match, OFP_DEFAULT_PRIORITY, 0);
     puts(s);
     free(s);
 }
@@ -1463,22 +1469,23 @@ minimatch_matches_flow(const struct minimatch *match,
 /* Appends a string representation of 'match' to 's'.  If 'priority' is
  * different from OFP_DEFAULT_PRIORITY, includes it in 's'. */
 void
-minimatch_format(const struct minimatch *match, struct ds *s, int priority)
+minimatch_format(const struct minimatch *match, struct ds *s, int priority,
+                 ovs_be16 filter_prog)
 {
     struct match megamatch;
 
     minimatch_expand(match, &megamatch);
-    match_format(&megamatch, s, priority);
+    match_format(&megamatch, s, priority, filter_prog);
 }
 
 /* Converts 'match' to a string and returns the string.  If 'priority' is
  * different from OFP_DEFAULT_PRIORITY, includes it in the string.  The caller
  * must free the string (with free()). */
 char *
-minimatch_to_string(const struct minimatch *match, int priority)
+minimatch_to_string(const struct minimatch *match, int priority, ovs_be16 filter_prog)
 {
     struct match megamatch;
 
     minimatch_expand(match, &megamatch);
-    return match_to_string(&megamatch, priority);
+    return match_to_string(&megamatch, priority, filter_prog);
 }

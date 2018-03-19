@@ -186,6 +186,9 @@ enum ofpraw {
     /* NXT 1.0+ (13): struct nx_flow_mod, uint8_t[8][]. */
     OFPRAW_NXT_FLOW_MOD,
 
+    /* NXT 1.0+ (31): struct ol_load_filter_prog, uint8_t[]. */
+    OFPRAW_NXT_LOAD_FILTER_PROG,
+
     /* OFPT 1.1-1.4 (15): struct ofp11_group_mod, uint8_t[8][]. */
     OFPRAW_OFPT11_GROUP_MOD,
     /* OFPT 1.5+ (15): struct ofp15_group_mod, uint8_t[8][]. */
@@ -712,6 +715,9 @@ enum ofptype {
     OFPTYPE_FLOW_MONITOR_CANCEL,        /* OFPRAW_NXT_FLOW_MONITOR_CANCEL. */
     OFPTYPE_FLOW_MONITOR_PAUSED,        /* OFPRAW_NXT_FLOW_MONITOR_PAUSED. */
     OFPTYPE_FLOW_MONITOR_RESUMED,       /* OFPRAW_NXT_FLOW_MONITOR_RESUMED. */
+
+    /* Orange extension. */
+    OFPTYPE_LOAD_FILTER_PROG,         /* OFPRAW_NXT_LOAD_FILTER_PROG. */
 };
 
 /* Decoding messages into OFPTYPE_* values. */

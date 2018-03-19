@@ -170,8 +170,9 @@ uint32_t match_hash(const struct match *, uint32_t basis);
 void match_init_hidden_fields(struct match *);
 bool match_has_default_hidden_fields(const struct match *);
 
-void match_format(const struct match *, struct ds *, int priority);
-char *match_to_string(const struct match *, int priority);
+void match_format(const struct match *, struct ds *, int priority,
+                  ovs_be16 filter_prog);
+char *match_to_string(const struct match *, int priority, ovs_be16 filter_prog);
 void match_print(const struct match *);
 
 /* Compressed match. */
@@ -211,7 +212,9 @@ bool minimatch_equal(const struct minimatch *a, const struct minimatch *b);
 
 bool minimatch_matches_flow(const struct minimatch *, const struct flow *);
 
-void minimatch_format(const struct minimatch *, struct ds *, int priority);
-char *minimatch_to_string(const struct minimatch *, int priority);
+void minimatch_format(const struct minimatch *, struct ds *, int priority,
+                      ovs_be16 filter_prog);
+char *minimatch_to_string(const struct minimatch *, int priority,
+                          ovs_be16 filter_prog);
 
 #endif /* match.h */

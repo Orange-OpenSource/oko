@@ -1415,7 +1415,7 @@ add_internal_miss_flow(struct ofproto_dpif *ofproto, int id,
     match_set_reg(&match, 0, id);
 
     error = ofproto_dpif_add_internal_flow(ofproto, &match, 0, 0, ofpacts,
-                                           &rule);
+                                           &rule, NULL);
     *rulep = error ? NULL : rule_dpif_cast(rule);
 
     return error;
@@ -1469,7 +1469,7 @@ add_internal_flows(struct ofproto_dpif *ofproto)
     match_init_catchall(&match);
     match_set_recirc_id(&match, 0);
     error = ofproto_dpif_add_internal_flow(ofproto, &match, 2, 0, &ofpacts,
-                                           &unused_rulep);
+                                           &unused_rulep, NULL);
     return error;
 }
 
@@ -3771,8 +3771,10 @@ ofproto_dpif_execute_actions__(struct ofproto_dpif *ofproto,
 
     uint64_t odp_actions_stub[1024 / 8];
     struct ofpbuf odp_actions = OFPBUF_STUB_INITIALIZER(odp_actions_stub);
+    /* We don't need to retrieve the filter program's id as we're not caching. */
     xlate_in_init(&xin, ofproto, flow, flow->in_port.ofp_port, rule,
-                  stats.tcp_flags, packet, NULL, &odp_actions);
+                  stats.tcp_flags, packet, NULL, NULL, &odp_actions,
+                  NULL);
     xin.ofpacts = ofpacts;
     xin.ofpacts_len = ofpacts_len;
     xin.resubmit_stats = &stats;
@@ -3840,6 +3842,18 @@ rule_dpif_get_flow_cookie(const struct rule_dpif *rule)
     return rule->up.flow_cookie;
 }
 
+bool
+rule_dpif_has_filter_prog(const struct rule_dpif *rule)
+{
+    return rule->up.cr.fp_instance_id != 0;
+}
+
+struct ubpf_vm *
+rule_dpif_get_ubpf_vm(const struct rule_dpif *rule)
+{
+    return rule->up.cr.vm;
+}
+
 void
 rule_dpif_reduce_timeouts(struct rule_dpif *rule, uint16_t idle_timeout,
                      uint16_t hard_timeout)
@@ -3890,6 +3904,11 @@ ofproto_dpif_get_tables_version(struct ofproto_dpif *ofproto OVS_UNUSED)
     return version;
 }
 
+struct rule_dpif *rule_dpif_from_cls_rule(const struct cls_rule *rule)
+{
+    return rule_dpif_cast(rule_from_cls_rule(rule));
+}
+
 /* The returned rule (if any) is valid at least until the next RCU quiescent
  * period.  If the rule needs to stay around longer, the caller should take
  * a reference.
@@ -3899,11 +3918,18 @@ ofproto_dpif_get_tables_version(struct ofproto_dpif *ofproto OVS_UNUSED)
 static struct rule_dpif *
 rule_dpif_lookup_in_table(struct ofproto_dpif *ofproto, cls_version_t version,
                           uint8_t table_id, struct flow *flow,
-                          struct flow_wildcards *wc)
+                          struct flow_wildcards *wc,
+                          const struct dp_packet *packet,
+                          bpf_result *hist_filter_progs,
+                          struct ovs_list **filter_prog_chain,
+                          bool *fp_chain_changed, int *last_fp_pos)
 {
     struct classifier *cls = &ofproto->up.tables[table_id].cls;
-    return rule_dpif_cast(rule_from_cls_rule(classifier_lookup(cls, version,
-                                                               flow, wc)));
+    return rule_dpif_from_cls_rule(classifier_lookup(cls, version, flow, wc,
+                                                    packet, hist_filter_progs,
+                                                    filter_prog_chain,
+                                                    fp_chain_changed,
+                                                    last_fp_pos));
 }
 
 /* Look up 'flow' in 'ofproto''s classifier version 'version', starting from
@@ -3937,7 +3963,11 @@ rule_dpif_lookup_from_table(struct ofproto_dpif *ofproto,
                             struct flow_wildcards *wc,
                             const struct dpif_flow_stats *stats,
                             uint8_t *table_id, ofp_port_t in_port,
-                            bool may_packet_in, bool honor_table_miss)
+                            bool may_packet_in, bool honor_table_miss,
+                            const struct dp_packet *packet,
+                            bpf_result *hist_filter_progs,
+                            struct ovs_list **filter_prog_chain,
+                            bool *fp_chain_changed, int *last_fp_pos)
 {
     ovs_be16 old_tp_src = flow->tp_src, old_tp_dst = flow->tp_dst;
     ofp_port_t old_in_port = flow->in_port.ofp_port;
@@ -3983,7 +4013,10 @@ rule_dpif_lookup_from_table(struct ofproto_dpif *ofproto,
          next_id++, next_id += (next_id == TBL_INTERNAL))
     {
         *table_id = next_id;
-        rule = rule_dpif_lookup_in_table(ofproto, version, next_id, flow, wc);
+        rule = rule_dpif_lookup_in_table(ofproto, version, next_id, flow, wc,
+                                         packet, hist_filter_progs,
+                                         filter_prog_chain, fp_chain_changed,
+                                         last_fp_pos);
         if (stats) {
             struct oftable *tbl = &ofproto->up.tables[next_id];
             unsigned long orig;
@@ -4699,7 +4732,9 @@ struct trace_ctx {
     struct flow flow;
     struct ds *result;
     struct flow_wildcards wc;
+    struct ovs_list *filter_prog_chain;
     struct ofpbuf odp_actions;
+    bpf_result *hist_filter_progs;
 };
 
 static void
@@ -4783,7 +4818,7 @@ trace_format_megaflow(struct ds *result, int level, const char *title,
     ds_put_char_multiple(result, '\t', level);
     ds_put_format(result, "%s: ", title);
     match_init(&match, trace->key, &trace->wc);
-    match_format(&match, result, OFP_DEFAULT_PRIORITY);
+    match_format(&match, result, OFP_DEFAULT_PRIORITY, 0);
     ds_put_char(result, '\n');
 }
 
@@ -5133,9 +5168,11 @@ ofproto_trace(struct ofproto_dpif *ofproto, struct flow *flow,
     trace.result = ds;
     trace.key = flow; /* Original flow key, used for megaflow. */
     trace.flow = *flow; /* May be modified by actions. */
+    trace.hist_filter_progs = xzalloc(FILTER_PROG_CHAIN_MAX);
     xlate_in_init(&trace.xin, ofproto, flow, flow->in_port.ofp_port, NULL,
                   ntohs(flow->tcp_flags), packet, &trace.wc,
-                  &trace.odp_actions);
+                  &trace.filter_prog_chain, &trace.odp_actions,
+                  trace.hist_filter_progs);
     trace.xin.ofpacts = ofpacts;
     trace.xin.ofpacts_len = ofpacts_len;
     trace.xin.resubmit_hook = trace_resubmit;
@@ -5353,6 +5390,7 @@ ofproto_unixctl_dpif_dump_flows(struct unixctl_conn *conn,
         odp_flow_format(f.key, f.key_len, f.mask, f.mask_len,
                         &portno_names, &ds, verbosity);
         ds_put_cstr(&ds, ", ");
+        odp_format_filter_prog_chain(f.filter_prog_chain, &ds);
         dpif_flow_stats_format(&f.stats, &ds);
         ds_put_cstr(&ds, ", actions:");
         format_odp_actions(&ds, f.actions, f.actions_len);
@@ -5513,7 +5551,8 @@ ofproto_dpif_add_internal_flow(struct ofproto_dpif *ofproto,
                                const struct match *match, int priority,
                                uint16_t idle_timeout,
                                const struct ofpbuf *ofpacts,
-                               struct rule **rulep)
+                               struct rule **rulep,
+                               const struct dp_packet *packet)
 {
     struct ofproto_flow_mod ofm;
     struct rule_dpif *rule;
@@ -5542,7 +5581,7 @@ ofproto_dpif_add_internal_flow(struct ofproto_dpif *ofproto,
     rule = rule_dpif_lookup_in_table(ofproto,
                                      ofproto_dpif_get_tables_version(ofproto),
                                      TBL_INTERNAL, &ofm.fm.match.flow,
-                                     &ofm.fm.match.wc);
+                                     &ofm.fm.match.wc, packet, NULL, NULL, NULL, NULL);
     if (rule) {
         *rulep = &rule->up;
     } else {
@@ -5680,3 +5719,8 @@ const struct ofproto_class ofproto_dpif_class = {
     group_get_stats,            /* group_get_stats */
     get_datapath_version,       /* get_datapath_version */
 };
+
+int get_priority(struct rule_dpif *rule)
+{
+    return rule->up.cr.priority;
+}

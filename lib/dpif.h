@@ -579,6 +579,7 @@ struct dpif_flow {
     size_t key_len;               /* 'key' length in bytes. */
     const struct nlattr *mask;    /* Flow mask, as OVS_KEY_ATTR_* attrs. */
     size_t mask_len;              /* 'mask' length in bytes. */
+    const struct ovs_list *filter_prog_chain; /* Filter programs' IDs. */
     const struct nlattr *actions; /* Actions, as OVS_ACTION_ATTR_ */
     size_t actions_len;           /* 'actions' length in bytes. */
     ovs_u128 ufid;                /* Unique flow identifier. */
@@ -637,6 +638,7 @@ struct dpif_flow_put {
     size_t key_len;                 /* Length of 'key' in bytes. */
     const struct nlattr *mask;      /* Mask to put. */
     size_t mask_len;                /* Length of 'mask' in bytes. */
+    struct ovs_list *filter_prog_chain; /* Filter program chain. */
     const struct nlattr *actions;   /* Actions to perform on flow. */
     size_t actions_len;             /* Length of 'actions' in bytes. */
     const ovs_u128 *ufid;           /* Optional unique flow identifier. */
@@ -829,10 +831,12 @@ typedef int upcall_callback(const struct dp_packet *packet,
                             unsigned pmd_id,
                             enum dpif_upcall_type type,
                             const struct nlattr *userdata,
+                            struct ovs_list **filter_prog_chain,
                             struct ofpbuf *actions,
                             struct flow_wildcards *wc,
                             struct ofpbuf *put_actions,
-                            void *aux);
+                            void *aux,
+                            bpf_result *hist_filter_progs);
 
 void dpif_register_upcall_cb(struct dpif *, upcall_callback *, void *aux);
 

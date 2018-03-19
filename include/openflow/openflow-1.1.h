@@ -340,11 +340,13 @@ struct ofp11_flow_mod {
                                     output group. A value of OFPG_ANY
                                     indicates no restriction. */
     ovs_be16 flags;              /* One of OFPFF_*. */
+    ovs_be16 filter_prog;        /* Filter program ID. */
     ovs_be16 importance;         /* Eviction precedence (OF1.4+). */
+    uint8_t pad[6];               /* Align to 64-bits. */
     /* Followed by an ofp11_match structure. */
     /* Followed by an instruction set. */
 };
-OFP_ASSERT(sizeof(struct ofp11_flow_mod) == 40);
+OFP_ASSERT(sizeof(struct ofp11_flow_mod) == 48);
 
 /* Group types. Values in the range [128, 255] are reserved for experimental
  * use. */
@@ -414,11 +416,11 @@ struct ofp11_flow_stats {
                                   duration_sec. */
     ovs_be16 priority;         /* Priority of the entry. Only meaningful
                                   when this is not an exact-match entry. */
+    ovs_be16 filter_prog;      /* Filter program ID. */
     ovs_be16 idle_timeout;     /* Number of seconds idle before expiration. */
     ovs_be16 hard_timeout;     /* Number of seconds before expiration. */
     ovs_be16 flags;            /* OF 1.3: Set of OFPFF*. */
     ovs_be16 importance;       /* Eviction precedence (OF1.4+). */
-    uint8_t  pad2[2];          /* Align to 64-bits. */
     ovs_be64 cookie;           /* Opaque controller-issued identifier. */
     ovs_be64 packet_count;     /* Number of packets in flow. */
     ovs_be64 byte_count;       /* Number of bytes in flow. */

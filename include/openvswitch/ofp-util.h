@@ -27,6 +27,7 @@
 #include "openvswitch/netdev.h"
 #include "openflow/netronome-ext.h"
 #include "openflow/nicira-ext.h"
+#include "openflow/orange-ext.h"
 #include "openvswitch/ofpbuf.h"
 #include "openvswitch/types.h"
 #include "openvswitch/type-props.h"
@@ -287,6 +288,7 @@ struct ofputil_flow_mod {
 
     struct match match;
     int priority;
+    ovs_be16 filter_prog;
 
     /* Cookie matching.  The flow_mod affects only flows that have cookies that
      * bitwise match 'cookie' bits in positions where 'cookie_mask has 1-bits.
@@ -338,6 +340,13 @@ enum ofperr ofputil_decode_flow_mod(struct ofputil_flow_mod *,
 struct ofpbuf *ofputil_encode_flow_mod(const struct ofputil_flow_mod *,
                                        enum ofputil_protocol);
 
+enum ofperr ofputil_decode_load_filter_prog(struct ol_load_filter_prog *,
+                                            char **, const struct ofp_header *);
+struct ofpbuf *ofputil_encode_load_filter_prog(enum ofp_version ofp_version,
+                                            const ovs_be16 filter_prog,
+                                            void* program,
+                                            const size_t length);
+
 /* Flow stats or aggregate stats request, independent of protocol. */
 struct ofputil_flow_stats_request {
     bool aggregate;             /* Aggregate results? */
@@ -360,6 +369,7 @@ struct ofputil_flow_stats {
     ovs_be64 cookie;
     uint8_t table_id;
     uint16_t priority;
+    ovs_be16 filter_prog;
     uint16_t idle_timeout;
     uint16_t hard_timeout;
     uint32_t duration_sec;

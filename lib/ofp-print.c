@@ -135,7 +135,7 @@ ofp_print_packet_in(struct ds *string, const struct ofp_header *oh,
 
     ds_put_format(string, " total_len=%"PRIuSIZE" ", total_len);
 
-    match_format(&public->flow_metadata, string, OFP_DEFAULT_PRIORITY);
+    match_format(&public->flow_metadata, string, OFP_DEFAULT_PRIORITY, 0);
 
     ds_put_format(string, " (via %s)",
                   ofputil_packet_in_reason_to_string(public->reason,
@@ -838,7 +838,7 @@ ofp_print_flow_mod(struct ds *s, const struct ofp_header *oh, int verbosity)
         /* nx_match_to_string() doesn't print priority. */
         need_priority = true;
     } else {
-        match_format(&fm.match, s, fm.priority);
+        match_format(&fm.match, s, fm.priority, fm.filter_prog);
 
         /* match_format() does print priority. */
         need_priority = false;
@@ -865,6 +865,9 @@ ofp_print_flow_mod(struct ds *s, const struct ofp_header *oh, int verbosity)
     }
     if (fm.priority != OFP_DEFAULT_PRIORITY && need_priority) {
         ds_put_format(s, "pri:%"PRIu16" ", fm.priority);
+    }
+    if (fm.filter_prog != 0) {
+        ds_put_format(s, "filter_prog:%"PRIu16" ", fm.filter_prog);
     }
     if (fm.buffer_id != UINT32_MAX) {
         ds_put_format(s, "buf:0x%"PRIx32" ", fm.buffer_id);
@@ -959,7 +962,7 @@ ofp_print_flow_removed(struct ds *string, const struct ofp_header *oh)
     }
 
     ds_put_char(string, ' ');
-    match_format(&fr.match, string, fr.priority);
+    match_format(&fr.match, string, fr.priority, 0);
 
     ds_put_format(string, " reason=%s",
                   ofp_flow_removed_reason_to_string(fr.reason, reasonbuf,
@@ -1607,7 +1610,7 @@ ofp_print_flow_stats_request(struct ds *string, const struct ofp_header *oh)
     }
 
     ds_put_char(string, ' ');
-    match_format(&fsr.match, string, OFP_DEFAULT_PRIORITY);
+    match_format(&fsr.match, string, OFP_DEFAULT_PRIORITY, 0);
 }
 
 void
@@ -1648,7 +1651,7 @@ ofp_print_flow_stats(struct ds *string, struct ofputil_flow_stats *fs)
                       colors.param, colors.end, fs->hard_age);
     }
 
-    match_format(&fs->match, string, fs->priority);
+    match_format(&fs->match, string, fs->priority, fs->filter_prog);
     if (string->string[string->length - 1] != ' ') {
         ds_put_char(string, ' ');
     }
@@ -2352,7 +2355,7 @@ ofp_print_nxst_flow_monitor_request(struct ds *string,
         }
 
         ds_put_char(string, ' ');
-        match_format(&request.match, string, OFP_DEFAULT_PRIORITY);
+        match_format(&request.match, string, OFP_DEFAULT_PRIORITY, 0);
         ds_chomp(string, ' ');
     }
 }
@@ -2415,7 +2418,7 @@ ofp_print_nxst_flow_monitor_reply(struct ds *string,
         ds_put_format(string, " cookie=%#"PRIx64, ntohll(update.cookie));
 
         ds_put_char(string, ' ');
-        match_format(update.match, string, OFP_DEFAULT_PRIORITY);
+        match_format(update.match, string, OFP_DEFAULT_PRIORITY, 0);
 
         if (update.ofpacts_len) {
             if (string->string[string->length - 1] != ' ') {
@@ -3424,6 +3427,9 @@ ofp_to_string__(const struct ofp_header *oh, enum ofpraw raw,
 
     case OFPTYPE_FLOW_MOD:
         ofp_print_flow_mod(string, oh, verbosity);
+        break;
+
+    case OFPTYPE_LOAD_FILTER_PROG:
         break;
 
     case OFPTYPE_PORT_MOD:

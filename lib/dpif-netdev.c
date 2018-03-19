@@ -69,6 +69,7 @@
 #include "tnl-ports.h"
 #include "unixctl.h"
 #include "util.h"
+#include "bpf.h"
 
 VLOG_DEFINE_THIS_MODULE(dpif_netdev);
 
@@ -156,9 +157,11 @@ struct dpcls {
 
 /* A rule to be inserted to the classifier. */
 struct dpcls_rule {
-    struct cmap_node cmap_node;   /* Within struct dpcls_subtable 'rules'. */
-    struct netdev_flow_key *mask; /* Subtable's mask. */
-    struct netdev_flow_key flow;  /* Matching key. */
+    struct cmap_node cmap_node;     /* Within struct dpcls_subtable 'rules'. */
+    const struct ovs_list *filter_prog_chain; /* List of filter programs
+                                               * to run. */
+    struct netdev_flow_key *mask;   /* Subtable's mask. */
+    struct netdev_flow_key flow;    /* Matching key. */
     /* 'flow' must be the last field, additional space is allocated here. */
 };
 
@@ -169,7 +172,20 @@ static void dpcls_insert(struct dpcls *, struct dpcls_rule *,
 static void dpcls_remove(struct dpcls *, struct dpcls_rule *);
 static bool dpcls_lookup(const struct dpcls *cls,
                          const struct netdev_flow_key keys[],
-                         struct dpcls_rule **rules, size_t cnt);
+                         struct dp_packet **packets, struct dpcls_rule **rules,
+                         size_t cnt, bpf_result *hists_filter_progs);
+
+static void filter_prog_set_add(struct ovs_list *filter_progs_installed,
+                                ovs_be16 filter_prog);
+static void filter_prog_set_remove(struct ovs_list *filter_progs_installed,
+                                   ovs_be16 filter_prog);
+struct filter_prog_id {
+    ovs_be16 fp_instance_id;
+    char pad[2];
+    uint32_t count;
+    struct ovs_list filter_prog_id_node;
+};
+
 
 /* Datapath based on the network device interface from netdev.h.
  *
@@ -431,6 +447,15 @@ struct dp_netdev_pmd_thread {
     /* Statistics. */
     struct dp_netdev_pmd_stats stats;
 
+    /* Array to store the result of filter programs execution.  For direct
+     * acces to execution results the array needs to be as large as the
+     * maximum number of filter programs times the maximum number of packets
+     * in a batch. */
+    bpf_result hists_filter_progs[NETDEV_MAX_BURST * FILTER_PROG_CHAIN_MAX];
+    /* Set of filter program ids installed in the datapath.  Used to know
+     * which index to zero out in the history of filter program executions. */
+    struct ovs_list filter_progs_installed;
+
     /* Cycles counters */
     struct dp_netdev_pmd_cycles cycles;
 
@@ -498,7 +523,8 @@ static void dp_netdev_execute_actions(struct dp_netdev_pmd_thread *pmd,
                                       struct dp_packet_batch *,
                                       bool may_steal,
                                       const struct nlattr *actions,
-                                      size_t actions_len);
+                                      size_t actions_len,
+                                      struct ovs_list *fp_chain);
 static void dp_netdev_input(struct dp_netdev_pmd_thread *,
                             struct dp_packet_batch *, odp_port_t port_no);
 static void dp_netdev_recirculate(struct dp_netdev_pmd_thread *,
@@ -1510,6 +1536,18 @@ dp_netdev_pmd_remove_flow(struct dp_netdev_pmd_thread *pmd,
 {
     struct cmap_node *node = CONST_CAST(struct cmap_node *, &flow->node);
 
+    if (flow->cr.filter_prog_chain) {
+        struct filter_prog *fp;
+        LIST_FOR_EACH (fp, filter_prog_node, flow->cr.filter_prog_chain) {
+            filter_prog_set_remove(&pmd->filter_progs_installed,
+                                   fp->fp_instance_id);
+        }
+    }
+
+    struct ovs_list *fp_chain = CONST_CAST(struct ovs_list *,
+                                           flow->cr.filter_prog_chain);
+    filter_prog_chain_free(fp_chain);
+
     dpcls_remove(&pmd->cls, &flow->cr);
     cmap_remove(&pmd->flow_table, node, dp_netdev_flow_hash(&flow->ufid));
     flow->dead = true;
@@ -1839,7 +1877,8 @@ emc_insert(struct emc_cache *cache, const struct netdev_flow_key *key,
 }
 
 static inline struct dp_netdev_flow *
-emc_lookup(struct emc_cache *cache, const struct netdev_flow_key *key)
+emc_lookup(struct emc_cache *cache, const struct netdev_flow_key *key,
+           struct dp_packet *packet, bpf_result *hist_filter_progs)
 {
     struct emc_entry *current_entry;
 
@@ -1847,23 +1886,73 @@ emc_lookup(struct emc_cache *cache, const struct netdev_flow_key *key)
         if (current_entry->key.hash == key->hash
             && emc_entry_alive(current_entry)
             && netdev_flow_key_equal_mf(&current_entry->key, &key->mf)) {
-
-            /* We found the entry with the 'key->mf' miniflow */
-            return current_entry->flow;
+            if (!current_entry->flow->cr.filter_prog_chain ||
+                matches_filter_prog_chain(
+                                    current_entry->flow->cr.filter_prog_chain,
+                                    packet, hist_filter_progs)) {
+                /* We found the entry with the 'key->mf' miniflow */
+                return current_entry->flow;
+            }
         }
     }
 
     return NULL;
 }
 
+static void
+filter_prog_set_add(struct ovs_list *filter_progs_installed,
+                    ovs_be16 fp_instance_id)
+{
+    struct filter_prog_id *fp;
+    LIST_FOR_EACH (fp, filter_prog_id_node, filter_progs_installed) {
+        if (fp->fp_instance_id == fp_instance_id) {
+            fp->count++;
+            return;
+        } else if (fp->fp_instance_id > fp_instance_id) {
+            struct filter_prog_id *new_fp;
+            new_fp = xmalloc(sizeof(struct filter_prog_id));
+            new_fp->fp_instance_id = fp_instance_id;
+            new_fp->count = 1;
+            ovs_list_insert(&fp->filter_prog_id_node,
+                            &new_fp->filter_prog_id_node);
+            return;
+        }
+    }
+    /* We didn't add the filter program id yet, so it either mean that it
+     * should be added last or that the set is empty. */
+    fp = xmalloc(sizeof(struct filter_prog_id));
+    fp->fp_instance_id = fp_instance_id;
+    fp->count = 1;
+    ovs_list_push_back(filter_progs_installed, &fp->filter_prog_id_node);
+}
+
+static void
+filter_prog_set_remove(struct ovs_list *filter_progs_installed,
+                       ovs_be16 fp_instance_id)
+{
+    struct filter_prog_id *fp;
+    LIST_FOR_EACH (fp, filter_prog_id_node, filter_progs_installed) {
+        if (fp->fp_instance_id == fp_instance_id) {
+            fp->count--;
+            if (fp->count == 0) {
+                ovs_list_remove(&fp->filter_prog_id_node);
+                free(fp);
+            }
+        } else if (fp->fp_instance_id > fp_instance_id) {
+            break;
+        }
+    }
+}
+
 static struct dp_netdev_flow *
 dp_netdev_pmd_lookup_flow(const struct dp_netdev_pmd_thread *pmd,
-                          const struct netdev_flow_key *key)
+                          const struct netdev_flow_key *key,
+                          struct dp_packet *packet,
+                          bpf_result *hist_filter_progs)
 {
     struct dp_netdev_flow *netdev_flow;
     struct dpcls_rule *rule;
-
-    dpcls_lookup(&pmd->cls, key, &rule, 1);
+    dpcls_lookup(&pmd->cls, key, &packet, &rule, 1, hist_filter_progs);
     netdev_flow = dp_netdev_flow_cast(rule);
 
     return netdev_flow;
@@ -1963,6 +2052,7 @@ dp_netdev_flow_to_dpif_flow(const struct dp_netdev_flow *netdev_flow,
     flow->ufid = netdev_flow->ufid;
     flow->ufid_present = true;
     flow->pmd_id = netdev_flow->pmd_id;
+    flow->filter_prog_chain = netdev_flow->cr.filter_prog_chain;
     get_dpif_flow_stats(netdev_flow, &flow->stats);
 }
 
@@ -2093,6 +2183,7 @@ out:
 static struct dp_netdev_flow *
 dp_netdev_flow_add(struct dp_netdev_pmd_thread *pmd,
                    struct match *match, const ovs_u128 *ufid,
+                   const struct ovs_list *filter_prog_chain,
                    const struct nlattr *actions, size_t actions_len)
     OVS_REQUIRES(pmd->flow_mutex)
 {
@@ -2116,10 +2207,19 @@ dp_netdev_flow_add(struct dp_netdev_pmd_thread *pmd,
     ovsrcu_set(&flow->actions, dp_netdev_actions_create(actions, actions_len));
 
     netdev_flow_key_init_masked(&flow->cr.flow, &match->flow, &mask);
+    flow->cr.filter_prog_chain = filter_prog_chain;
     dpcls_insert(&pmd->cls, &flow->cr, &mask);
 
     cmap_insert(&pmd->flow_table, CONST_CAST(struct cmap_node *, &flow->node),
                 dp_netdev_flow_hash(&flow->ufid));
+
+    /* Update the set of filter programs cached. */
+    if (filter_prog_chain) {
+        struct filter_prog *fp;
+        LIST_FOR_EACH (fp, filter_prog_node, filter_prog_chain) {
+            filter_prog_set_add(&pmd->filter_progs_installed, fp->fp_instance_id);
+        }
+    }
 
     if (OVS_UNLIKELY(VLOG_IS_DBG_ENABLED())) {
         struct ds ds = DS_EMPTY_INITIALIZER;
@@ -2197,15 +2297,17 @@ dpif_netdev_flow_put(struct dpif *dpif, const struct dpif_flow_put *put)
     }
 
     ovs_mutex_lock(&pmd->flow_mutex);
-    netdev_flow = dp_netdev_pmd_lookup_flow(pmd, &key);
+    /* TODO: Special lookup to check if a dp rule already exists.
+     * Requires to check the filter program chain too. */
+    netdev_flow = dp_netdev_pmd_lookup_flow(pmd, &key, NULL, NULL);
     if (!netdev_flow) {
         if (put->flags & DPIF_FP_CREATE) {
             if (cmap_count(&pmd->flow_table) < MAX_FLOWS) {
                 if (put->stats) {
                     memset(put->stats, 0, sizeof *put->stats);
                 }
-                dp_netdev_flow_add(pmd, &match, &ufid, put->actions,
-                                   put->actions_len);
+                dp_netdev_flow_add(pmd, &match, &ufid, put->filter_prog_chain,
+                                   put->actions, put->actions_len);
                 error = 0;
             } else {
                 error = EFBIG;
@@ -2476,7 +2578,7 @@ dpif_netdev_execute(struct dpif *dpif, struct dpif_execute *execute)
 
     packet_batch_init_packet(&pp, execute->packet);
     dp_netdev_execute_actions(pmd, &pp, false, execute->actions,
-                              execute->actions_len);
+                              execute->actions_len, NULL);
 
     if (pmd->core_id == NON_PMD_CORE_ID) {
         ovs_mutex_unlock(&dp->non_pmd_mutex);
@@ -3026,6 +3128,7 @@ dp_netdev_configure_pmd(struct dp_netdev_pmd_thread *pmd, struct dp_netdev *dp,
     dpcls_init(&pmd->cls);
     cmap_init(&pmd->flow_table);
     ovs_list_init(&pmd->poll_list);
+    ovs_list_init(&pmd->filter_progs_installed);
     hmap_init(&pmd->tx_ports);
     hmap_init(&pmd->port_cache);
     /* init the 'flow_cache' since there is no
@@ -3487,7 +3590,9 @@ static int
 dp_netdev_upcall(struct dp_netdev_pmd_thread *pmd, struct dp_packet *packet_,
                  struct flow *flow, struct flow_wildcards *wc, ovs_u128 *ufid,
                  enum dpif_upcall_type type, const struct nlattr *userdata,
-                 struct ofpbuf *actions, struct ofpbuf *put_actions)
+                 struct ovs_list **filter_prog_chain, struct ofpbuf *actions,
+                 struct ofpbuf *put_actions,
+                 bpf_result *hist_filter_progs)
 {
     struct dp_netdev *dp = pmd->dp;
     struct flow_tnl orig_tunnel;
@@ -3538,7 +3643,8 @@ dp_netdev_upcall(struct dp_netdev_pmd_thread *pmd, struct dp_packet *packet_,
     }
 
     err = dp->upcall_cb(packet_, flow, ufid, pmd->core_id, type, userdata,
-                        actions, wc, put_actions, dp->upcall_aux);
+                        filter_prog_chain, actions, wc, put_actions,
+                        dp->upcall_aux, hist_filter_progs);
     if (err && err != ENOSPC) {
         return err;
     }
@@ -3641,6 +3747,8 @@ packet_batch_per_flow_execute(struct packet_batch_per_flow *batch,
 {
     struct dp_netdev_actions *actions;
     struct dp_netdev_flow *flow = batch->flow;
+    struct ovs_list *fp_chain = CONST_CAST(struct ovs_list *,
+                                           flow->cr.filter_prog_chain);
 
     dp_netdev_flow_used(flow, batch->array.count, batch->byte_count,
                         batch->tcp_flags, now);
@@ -3648,7 +3756,7 @@ packet_batch_per_flow_execute(struct packet_batch_per_flow *batch,
     actions = dp_netdev_flow_get_actions(flow);
 
     dp_netdev_execute_actions(pmd, &batch->array, true,
-                              actions->actions, actions->size);
+                              actions->actions, actions->size, fp_chain);
 }
 
 static inline void
@@ -3712,7 +3820,9 @@ emc_processing(struct dp_netdev_pmd_thread *pmd, struct dp_packet_batch *packets
         key->len = 0; /* Not computed yet. */
         key->hash = dpif_netdev_packet_get_rss_hash(packet, &key->mf);
 
-        flow = emc_lookup(flow_cache, key);
+        bpf_result *hist_filter_progs = pmd->hists_filter_progs +
+                                             i * FILTER_PROG_CHAIN_MAX;
+        flow = emc_lookup(flow_cache, key, packet, hist_filter_progs);
         if (OVS_LIKELY(flow)) {
             dp_netdev_queue_batches(packet, flow, &key->mf, batches,
                                     n_batches);
@@ -3734,9 +3844,9 @@ emc_processing(struct dp_netdev_pmd_thread *pmd, struct dp_packet_batch *packets
 
 static inline void
 handle_packet_upcall(struct dp_netdev_pmd_thread *pmd, struct dp_packet *packet,
-                     const struct netdev_flow_key *key,
-                     struct ofpbuf *actions, struct ofpbuf *put_actions,
-                     int *lost_cnt)
+                     const struct netdev_flow_key *key, struct ofpbuf *actions,
+                     struct ofpbuf *put_actions, int *lost_cnt,
+                     bpf_result *hist_filter_progs)
 {
     struct ofpbuf *add_actions;
     struct dp_packet_batch b;
@@ -3750,10 +3860,12 @@ handle_packet_upcall(struct dp_netdev_pmd_thread *pmd, struct dp_packet *packet,
     ofpbuf_clear(actions);
     ofpbuf_clear(put_actions);
 
+    struct ovs_list *filter_prog_chain = NULL;
+
     dpif_flow_hash(pmd->dp->dpif, &match.flow, sizeof match.flow, &ufid);
     error = dp_netdev_upcall(pmd, packet, &match.flow, &match.wc,
-                             &ufid, DPIF_UC_MISS, NULL, actions,
-                             put_actions);
+                             &ufid, DPIF_UC_MISS, NULL, &filter_prog_chain,
+                             actions, put_actions, hist_filter_progs);
     if (OVS_UNLIKELY(error && error != ENOSPC)) {
         dp_packet_delete(packet);
         (*lost_cnt)++;
@@ -3775,7 +3887,7 @@ handle_packet_upcall(struct dp_netdev_pmd_thread *pmd, struct dp_packet *packet,
      * we'll send the packet up twice. */
     packet_batch_init_packet(&b, packet);
     dp_netdev_execute_actions(pmd, &b, true,
-                              actions->data, actions->size);
+                              actions->data, actions->size, filter_prog_chain);
 
     add_actions = put_actions->size ? put_actions : actions;
     if (OVS_LIKELY(error != ENOSPC)) {
@@ -3788,15 +3900,19 @@ handle_packet_upcall(struct dp_netdev_pmd_thread *pmd, struct dp_packet *packet,
          * to be locking everyone out of making flow installs.  If we
          * move to a per-core classifier, it would be reasonable. */
         ovs_mutex_lock(&pmd->flow_mutex);
-        netdev_flow = dp_netdev_pmd_lookup_flow(pmd, key);
+        netdev_flow = dp_netdev_pmd_lookup_flow(pmd, key, packet,
+                                                hist_filter_progs);
         if (OVS_LIKELY(!netdev_flow)) {
             netdev_flow = dp_netdev_flow_add(pmd, &match, &ufid,
+                                             filter_prog_chain,
                                              add_actions->data,
                                              add_actions->size);
         }
         ovs_mutex_unlock(&pmd->flow_mutex);
 
         emc_insert(&pmd->flow_cache, key, netdev_flow);
+    } else {
+        filter_prog_chain_free(filter_prog_chain);
     }
 }
 
@@ -3825,7 +3941,8 @@ fast_path_processing(struct dp_netdev_pmd_thread *pmd,
         /* Key length is needed in all the cases, hash computed on demand. */
         keys[i].len = netdev_flow_key_size(miniflow_n_values(&keys[i].mf));
     }
-    any_miss = !dpcls_lookup(&pmd->cls, keys, rules, cnt);
+    any_miss = !dpcls_lookup(&pmd->cls, keys, packets, rules, cnt,
+                             pmd->hists_filter_progs);
     if (OVS_UNLIKELY(any_miss) && !fat_rwlock_tryrdlock(&dp->upcall_rwlock)) {
         uint64_t actions_stub[512 / 8], slow_stub[512 / 8];
         struct ofpbuf actions, put_actions;
@@ -3840,18 +3957,22 @@ fast_path_processing(struct dp_netdev_pmd_thread *pmd,
                 continue;
             }
 
+            bpf_result *hist_filter_progs = pmd->hists_filter_progs +
+                                            FILTER_PROG_CHAIN_MAX * i;
+
             /* It's possible that an earlier slow path execution installed
              * a rule covering this flow.  In this case, it's a lot cheaper
              * to catch it here than execute a miss. */
-            netdev_flow = dp_netdev_pmd_lookup_flow(pmd, &keys[i]);
+            netdev_flow = dp_netdev_pmd_lookup_flow(pmd, &keys[i], packets[i],
+                                                    hist_filter_progs);
             if (netdev_flow) {
                 rules[i] = &netdev_flow->cr;
                 continue;
             }
 
             miss_cnt++;
-            handle_packet_upcall(pmd, packets[i], &keys[i], &actions, &put_actions,
-                          &lost_cnt);
+            handle_packet_upcall(pmd, packets[i], &keys[i], &actions,
+                                 &put_actions, &lost_cnt, hist_filter_progs);
         }
 
         ofpbuf_uninit(&actions);
@@ -3909,6 +4030,16 @@ dp_netdev_input__(struct dp_netdev_pmd_thread *pmd,
     struct packet_batch_per_flow batches[PKT_ARRAY_SIZE];
     long long now = time_msec();
     size_t newcnt, n_batches, i;
+
+    /* TODO Might want to do this only when we hit a filter program. */
+    struct filter_prog_id *fp;
+    LIST_FOR_EACH (fp, filter_prog_id_node, &pmd->filter_progs_installed) {
+        int index = fp->fp_instance_id;
+        for (i = 0; i < PKT_ARRAY_SIZE; i++) {
+            pmd->hists_filter_progs[index] = BPF_UNKNOWN;
+            index += FILTER_PROG_CHAIN_MAX;
+        }
+    }
 
     n_batches = 0;
     newcnt = emc_processing(pmd, packets, keys, batches, &n_batches,
@@ -4001,7 +4132,8 @@ dp_execute_userspace_action(struct dp_netdev_pmd_thread *pmd,
                             struct dp_packet *packet, bool may_steal,
                             struct flow *flow, ovs_u128 *ufid,
                             struct ofpbuf *actions,
-                            const struct nlattr *userdata)
+                            const struct nlattr *userdata,
+                            struct ovs_list *fp_chain)
 {
     struct dp_packet_batch b;
     int error;
@@ -4009,12 +4141,12 @@ dp_execute_userspace_action(struct dp_netdev_pmd_thread *pmd,
     ofpbuf_clear(actions);
 
     error = dp_netdev_upcall(pmd, packet, flow, NULL, ufid,
-                             DPIF_UC_ACTION, userdata, actions,
-                             NULL);
+                             DPIF_UC_ACTION, userdata, &fp_chain,
+                             actions, NULL, NULL);
     if (!error || error == ENOSPC) {
         packet_batch_init_packet(&b, packet);
         dp_netdev_execute_actions(pmd, &b, may_steal,
-                                  actions->data, actions->size);
+                                  actions->data, actions->size, fp_chain);
     } else if (may_steal) {
         dp_packet_delete(packet);
     }
@@ -4022,7 +4154,8 @@ dp_execute_userspace_action(struct dp_netdev_pmd_thread *pmd,
 
 static void
 dp_execute_cb(void *aux_, struct dp_packet_batch *packets_,
-              const struct nlattr *a, bool may_steal)
+              const struct nlattr *a, bool may_steal,
+              struct ovs_list *fp_chain)
 {
     struct dp_netdev_execute_aux *aux = aux_;
     uint32_t *depth = recirc_depth_get();
@@ -4134,7 +4267,8 @@ dp_execute_cb(void *aux_, struct dp_packet_batch *packets_,
                 flow_extract(packets[i], &flow);
                 dpif_flow_hash(dp->dpif, &flow, sizeof flow, &ufid);
                 dp_execute_userspace_action(pmd, packets[i], may_steal, &flow,
-                                            &ufid, &actions, userdata);
+                                            &ufid, &actions,
+                                            userdata, fp_chain);
             }
 
             if (clone) {
@@ -4200,12 +4334,13 @@ static void
 dp_netdev_execute_actions(struct dp_netdev_pmd_thread *pmd,
                           struct dp_packet_batch *packets,
                           bool may_steal,
-                          const struct nlattr *actions, size_t actions_len)
+                          const struct nlattr *actions, size_t actions_len,
+                          struct ovs_list *fp_chain)
 {
     struct dp_netdev_execute_aux aux = { pmd };
 
     odp_execute_actions(&aux, packets, may_steal, actions,
-                        actions_len, dp_execute_cb);
+                        actions_len, fp_chain, dp_execute_cb);
 }
 
 const struct dpif_class dpif_netdev_class = {
@@ -4494,7 +4629,8 @@ dpcls_rule_matches_key(const struct dpcls_rule *rule,
  * Returns true if all flows found a corresponding rule. */
 static bool
 dpcls_lookup(const struct dpcls *cls, const struct netdev_flow_key keys[],
-             struct dpcls_rule **rules, const size_t cnt)
+             struct dp_packet **packets, struct dpcls_rule **rules,
+             const size_t cnt, bpf_result *hists_filter_progs)
 {
     /* The batch size 16 was experimentally found faster than 8 or 32. */
     typedef uint16_t map_type;
@@ -4545,8 +4681,21 @@ dpcls_lookup(const struct dpcls *cls, const struct netdev_flow_key keys[],
 
                 CMAP_NODE_FOR_EACH (rule, cmap_node, nodes[i]) {
                     if (OVS_LIKELY(dpcls_rule_matches_key(rule, &mkeys[i]))) {
-                        mrules[i] = rule;
-                        goto next;
+                        if (rule->filter_prog_chain
+                            && OVS_LIKELY(packets != NULL && packets[i])) {
+                            bpf_result *hist_filter_progs;
+                            hist_filter_progs = hists_filter_progs +
+                                                i * FILTER_PROG_CHAIN_MAX;
+                            if (matches_filter_prog_chain(rule->filter_prog_chain,
+                                                          packets[i],
+                                                          hist_filter_progs)) {
+                                mrules[i] = rule;
+                                goto next;
+                            }
+                        } else {
+                            mrules[i] = rule;
+                            goto next;
+                        }
                     }
                 }
                 ULLONG_SET0(map, i);  /* Did not match. */

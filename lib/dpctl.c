@@ -745,9 +745,12 @@ format_dpif_flow(struct ds *ds, const struct dpif_flow *f, struct hmap *ports,
         odp_format_ufid(&f->ufid, ds);
         ds_put_cstr(ds, ", ");
     }
+
     odp_flow_format(f->key, f->key_len, f->mask, f->mask_len, ports, ds,
                     dpctl_p->verbosity);
     ds_put_cstr(ds, ", ");
+
+    odp_format_filter_prog_chain(f->filter_prog_chain, ds);
 
     dpif_flow_stats_format(&f->stats, ds);
     ds_put_cstr(ds, ", actions:");
