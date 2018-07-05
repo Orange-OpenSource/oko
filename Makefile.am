@@ -116,7 +116,11 @@ EXTRA_DIST = \
 	$(MAN_FRAGMENTS) \
 	$(MAN_ROOTS) \
 	Vagrantfile \
-	Vagrantfile-FreeBSD
+	Vagrantfile-FreeBSD \
+	examples/bpf/dapper.c \
+	examples/bpf/p0f.c \
+	examples/bpf/rate-limiter.c \
+	examples/bpf/sffw.c
 bin_PROGRAMS =
 sbin_PROGRAMS =
 bin_SCRIPTS =
