@@ -56,10 +56,10 @@ struct ubpf_map_def buckets = {
 // initially at 100000L
 #define GENERATION_RATE 10000L
 
-static void *(*ubpf_map_lookup)(const void *, const void *, uint64_t flags) = (void *)3;
-static int (*ubpf_map_update)(const void *, const void *, const void *, uint64_t flags) = (void *)4;
-static uint64_t (*ubpf_time_get_ns)(void) = (void *)7;
-static void (*ubpf_printf)(const char *fmt, ...) = (void *)8;
+static void *(*ubpf_map_lookup)(const void *, const void *) = (void *)1;
+static int (*ubpf_map_update)(const void *, const void *, const void *) = (void *)2;
+static uint64_t (*ubpf_time_get_ns)(void) = (void *)5;
+static void (*ubpf_printf)(const char *fmt, ...) = (void *)7;
 
 uint64_t entry(void *pkt, uint64_t pkt_len)
 {
@@ -74,18 +74,15 @@ uint64_t entry(void *pkt, uint64_t pkt_len)
         return 1;
     }
     uint32_t saddr = iphdr->saddr;
-    // ubpf_printf("saddr=%d", saddr);
-    // uint32_t hash = ubpf_hash(&saddr, sizeof(uint32_t));
 
-    bucket = ubpf_map_lookup(&buckets, &saddr, 0);
-    // ubpf_printf("%d\n", pkt_len);
+    bucket = ubpf_map_lookup(&buckets, &saddr);
 
     if (!bucket) {
         struct bucket_t b = {
             .count = BUCKET_SIZE - unit,
             .ts = ts,
         };
-        ubpf_map_update(&buckets, &saddr, &b, 0);
+        ubpf_map_update(&buckets, &saddr, &b);
         return 0;
     }
 

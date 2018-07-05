@@ -38,12 +38,9 @@ struct bpf_map_def {
     unsigned int nb_hash_functions;
 };
 
-#define BPF_ATTR_IS_KEY 0
-#define BPF_ATTR_IS_HASH 1
-
-static void *(*ubpf_map_lookup)(const void *, const void *) = (void *)3;
-static int (*ubpf_map_update)(void *, const void *, void *) = (void *)4;
-static int (*ubpf_map_delete)(void *, const void *) = (void *)6;
+static void *(*ubpf_map_lookup)(const void *, const void *) = (void *)1;
+static int (*ubpf_map_update)(void *, const void *, void *) = (void *)2;
+static int (*ubpf_map_delete)(void *, const void *) = (void *)3;
 
 struct connection_id_struct {
     uint32_t saddr;

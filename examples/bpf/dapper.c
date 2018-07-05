@@ -45,11 +45,12 @@
 #define BPF_ATTR_IS_KEY 0
 #define BPF_ATTR_IS_HASH 1
 
-static void *(*ubpf_map_lookup)(const void *, const void *) = (void *)3;
-static int (*ubpf_map_update)(void *, const void *, void *) = (void *)4;
-static int (*ubpf_map_delete)(void *, const void *) = (void *)6;
-static uint32_t (*ubpf_hash)(const void *, uint64_t) = (void *)7;
-static uint64_t (*ubpf_time_get_ns)() = (void *)8;
+static void *(*ubpf_map_lookup)(const void *, const void *) = (void *)1;
+static int (*ubpf_map_update)(void *, const void *, void *) = (void *)2;
+static int (*ubpf_map_delete)(void *, const void *) = (void *)3;
+static uint32_t (*ubpf_hash)(const void *, uint64_t) = (void *)6;
+static uint64_t (*ubpf_time_get_ns)() = (void *)5;
+static void (*ubpf_printf)(const char *fmt, ...) = (void *)7;
 
 struct stats {
     unsigned int senderIP;
