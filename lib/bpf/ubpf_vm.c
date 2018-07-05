@@ -1346,9 +1346,6 @@ validate_accesses(const struct ubpf_vm *vm,
                 if (!validate_reg_access(curr_state->regs, inst.dst,
                                          curr_state->instno, WRITE, errmsg))
                     return false;
-                if (!validate_reg_access(curr_state->regs, inst.src,
-                                         curr_state->instno, READ, errmsg))
-                    return false;
                 if (inst.opcode == EBPF_OP_LDDW) {
                     // Skip next instruction and remember map address:
                     struct ubpf_map *map;
@@ -1362,6 +1359,9 @@ validate_accesses(const struct ubpf_vm *vm,
                     DEBUG("\tAssigned map %p to R%d\n", map, inst.dst);
                     break;
                 }
+                if (!validate_reg_access(curr_state->regs, inst.src,
+                                         curr_state->instno, READ, errmsg))
+                    return false;
                 if (!validate_mem_access(curr_state, inst.src, &inst, READ,
                                          errmsg))
                     return false;
