@@ -90,8 +90,7 @@ BPF programs.
 Contacts
 --------
 
-Paul Chaignon &lt;paul.chaignon@orange.com&gt;<br>
-Kahina Lazri &lt;kahina.lazri@orange.com&gt;
+Paul Chaignon &lt;paul.chaignon@orange.com&gt;
 
 [`README-original.md`]:README-original.md
 [`b63bf24`]:https://github.com/Orange-OpenSource/oko/commit/b63bf24882095cc45d3304455cc37e9df4a08c58
