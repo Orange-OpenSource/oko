@@ -1811,6 +1811,131 @@ ofputil_encode_load_filter_prog(enum ofp_version ofp_version,
     return request;
 }
 
+enum ofperr
+ofputil_decode_update_map(struct ol_update_map *msg, void **key, void **value, const struct ofp_header *oh)
+{
+    enum ofperr error = 0;
+
+    struct ofpbuf b = ofpbuf_const_initializer(oh, ntohs(oh->length));
+    enum ofpraw raw = ofpraw_pull_assert(&b);
+    if (raw != OFPRAW_NXT_UPDATE_MAP) {
+        return OFPERR_OFPBMC_BAD_TYPE;
+    }
+
+    struct ol_update_map *buffer = ofpbuf_pull(&b, sizeof(struct ol_update_map));
+
+    msg->filter_prog = ntohs(buffer->filter_prog);
+    msg->map_id = ntohs(buffer->map_id);
+    msg->key_size = ntohl(buffer->key_size);
+    msg->value_size = ntohl(buffer->value_size);
+
+    *key = ofpbuf_try_pull(&b, msg->key_size);
+    if (!*key) {
+        VLOG_WARN_RL(&bad_ofmsg_rl, "size of provided map key is incorrect"
+                                    " (%"PRIu32")", msg->key_size);
+        return OFPERR_OFPBMC_BAD_LEN;
+    }
+
+    *value = ofpbuf_try_pull(&b, msg->value_size);
+    if (!*key) {
+        VLOG_WARN_RL(&bad_ofmsg_rl, "size of provided map value is incorrect"
+                                    " (%"PRIu32")", msg->value_size);
+        return OFPERR_OFPBMC_BAD_LEN;
+    }
+
+    return error;
+}
+
+void
+ofputil_get_map_key_value_size(int argc, char **args, ovs_be16 *key_size, ovs_be16 *value_size)
+{
+
+    int k = 0;
+    int value_pos = 0;
+
+    // the "key" need to be provided as a first element
+    if(strncmp(args[k], "key", sizeof("key")) != 0)
+    {
+        VLOG_ERR("Key keyword has not been found. The format of command is invalid.");
+        return;
+    }
+
+    while(k < argc && args[k])
+    {
+        if(strncmp(args[k], "value", sizeof("value")) == 0)
+        {
+            value_pos = k;
+            break;
+        }
+        k++;
+    }
+
+    if (value_pos == 0) {
+        VLOG_ERR("Value keyword has not been found. The format of command is invalid.");
+        return;
+    }
+
+    *key_size = (ovs_be16) value_pos - 1;
+    *value_size = (ovs_be16) argc - value_pos - 1;
+}
+
+int
+ofputil_map_parse_key_value(char **args, unsigned char *key,
+                            unsigned char *value, int key_size, int value_size)
+{
+    int value_pos = key_size + 1;
+    unsigned int i = 0, base = 10;
+    char *endptr;
+
+    for(i = 0; i < key_size; i++)
+    {
+        key[i] = strtoul(args[i+1], &endptr, base);
+        if (*endptr) {
+            VLOG_ERR("error parsing byte: %s", args[i+1]);
+            return -1;
+        }
+    }
+
+    args = args + value_pos;
+
+    for(i = 0; i < value_size; i++)
+    {
+        value[i] = strtoul(args[i+1], &endptr, base);
+        if (*endptr) {
+            VLOG_ERR("error parsing byte: %s", args[i+1]);
+            return -1;
+        }
+    }
+
+    return 0;
+}
+
+struct ofpbuf *
+ofputil_encode_update_map(enum ofp_version ofp_version,
+                          const ovs_be16 prog, const ovs_be16 map,
+                          void* key, void* value, const size_t key_size, const size_t value_size)
+{
+    struct ofpbuf *request;
+    struct ol_update_map *msg;
+    size_t length = key_size + value_size;
+
+    request = ofpraw_alloc(OFPRAW_NXT_UPDATE_MAP, ofp_version, length);
+
+    ofpbuf_put_zeros(request, sizeof *msg);
+
+    msg = request->msg;
+    msg->filter_prog = htons(prog);
+    msg->map_id = htons(map);
+    msg->key_size = htonl(key_size);
+    msg->value_size = htonl(value_size);
+
+    ofpbuf_put(request, key, key_size);
+    ofpbuf_put(request, value, value_size);
+    ofpmsg_update_length(request);
+
+    return request;
+}
+
 static enum ofperr
 ofputil_pull_bands(struct ofpbuf *msg, size_t len, uint16_t *n_bands,
                    struct ofpbuf *bands)
@@ -10011,6 +10136,7 @@ ofputil_is_bundlable(enum ofptype type)
     case OFPTYPE_IPFIX_FLOW_STATS_REQUEST:
     case OFPTYPE_IPFIX_FLOW_STATS_REPLY:
     case OFPTYPE_LOAD_FILTER_PROG:
+    case OFPTYPE_UPDATE_MAP:
         break;
     }
 

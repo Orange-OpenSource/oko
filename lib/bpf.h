@@ -44,6 +44,8 @@ bool filter_prog_chain_add(struct ovs_list **filter_prog_chain,
                            const ovs_be16 fp_instance_id, struct ubpf_vm *vm,
                            bpf_result expected_result);
 void filter_prog_chain_free(struct ovs_list *);
+void *ubpf_map_lookup(const struct ubpf_map *map, void *key);
+int ubpf_map_update(struct ubpf_map *map, const void *key, void *item);
 
 static inline bool
 ubpf_is_empty(struct ubpf_vm *vm)

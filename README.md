@@ -50,6 +50,12 @@ NXST_FLOW reply (xid=0x4):
  cookie=0x0, duration=103.842s, table=0, n_packets=0, n_bytes=0, idle_age=103, priority=0 actions=NORMAL
 ```
 
+We have also extended Oko with the CLI command to update the BPF maps of the given BPF program. Once the filter prog
+is loaded, the below command can be used to write entry (key-value pair) to the given BPF program.
+
+```
+ovs-ofctl update-map br0 1 0 key 1 0 0 0 value 1 0 0 0 0 0 0 0 1 0 0 0 0 0 0 0
+```
 
 License
 -------
@@ -82,6 +88,8 @@ relocation).
 - New `filter_prog` match field in OpenFlow table.
 - New `LOAD_FILTER_PROG` OpenFlow message to send a BPF program to load to the
 switch, as an ELF file.
+- New 'UPDATE_MAP' OpenFlow message to write entry (key-value pair) to the BPF
+map of the given BPF program.
 - New `SEND_MAPS` action and message to send the content of maps to the
 controller.
 - New filter program chain structure in the datapath to cache a succession of
@@ -91,6 +99,8 @@ Contacts
 --------
 
 Paul Chaignon &lt;paul.chaignon@orange.com&gt;
+
+Tomasz Osiński &lt;tomasz.osinski2@orange.com&gt;
 
 [`README-original.md`]:README-original.md
 [`b63bf24`]:https://github.com/Orange-OpenSource/oko/commit/b63bf24882095cc45d3304455cc37e9df4a08c58

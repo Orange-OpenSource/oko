@@ -5553,6 +5553,69 @@ handle_load_filter_prog(struct ofconn *ofconn, const struct ofp_header *oh)
 }
 
 static enum ofperr
+handle_update_map(struct ofconn *ofconn, const struct ofp_header *oh)
+    OVS_EXCLUDED(ofproto_mutex)
+{
+    struct ofproto *ofproto = ofconn_get_ofproto(ofconn);
+    enum ofperr error;
+    error = reject_slave_controller(ofconn);
+    if (error) {
+        return error;
+    }
+
+    struct ol_update_map msg;
+    void *key = NULL;
+    void *value = NULL;
+    error = ofputil_decode_update_map(&msg, &key, &value, oh);
+    if (error) {
+        return error;
+    }
+
+    if(!msg.filter_prog) {
+        VLOG_WARN_RL(&rl,
+                     "The filter program identifier is not provided.");
+        return OFPERR_OFPBRC_EPERM;
+    }
+
+    struct ubpf_vm *vm = ubpf_vms_lookup(ofproto, msg.filter_prog);
+    if (!vm) {
+        VLOG_WARN_RL(&rl,
+                     "The referenced filter program could not be found.");
+        return OFPERR_OFPBRC_EPERM;
+    }
+
+    const char *name = vm->ext_map_names[msg.map_id];
+
+    if(!name) {
+        VLOG_WARN_RL(&rl,
+                     "The map with the given ID does not exist.");
+        return OFPERR_OFPBRC_EPERM;
+    }
+
+    struct ubpf_map *map = ubpf_lookup_registered_map(vm, name);
+
+    if(msg.key_size != map->key_size) {
+        VLOG_WARN_RL(&rl,
+                     "Size of key does not match to size of map's key");
+        return OFPERR_OFPBRC_EPERM;
+    }
+
+    if(msg.value_size != map->value_size) {
+        VLOG_WARN_RL(&rl,
+                     "Size of value does not match to size of map's value");
+        return OFPERR_OFPBRC_EPERM;
+    }
+
+    if (ubpf_map_update(map, key, value) < 0) {
+        VLOG_WARN_RL(&rl,
+                     "The update map operation has failed.");
+        return OFPERR_OFPBRC_EPERM;
+    }
+
+    return error;
+}
+
+static enum ofperr
 handle_role_request(struct ofconn *ofconn, const struct ofp_header *oh)
 {
     struct ofputil_role_request request;
@@ -7436,6 +7499,9 @@ handle_openflow__(struct ofconn *ofconn, const struct ofpbuf *msg)
 
     case OFPTYPE_LOAD_FILTER_PROG:
         return handle_load_filter_prog(ofconn, oh);
+
+    case OFPTYPE_UPDATE_MAP:
+        return handle_update_map(ofconn, oh);
 
     case OFPTYPE_GROUP_MOD:
         return handle_group_mod(ofconn, oh);

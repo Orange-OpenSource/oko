@@ -4054,6 +4054,61 @@ ofctl_load_filter_prog(struct ovs_cmdl_context *ctx)
     vconn_close(vconn);
 }
 
+static void
+ofctl_update_map(struct ovs_cmdl_context *ctx)
+{
+    struct ofpbuf *request;
+    struct vconn *vconn;
+
+    enum ofputil_protocol protocol;
+    enum ofputil_protocol usable_protocols = OFPUTIL_P_OF13_UP | OFPUTIL_P_OF10_NXM;
+
+    enum ofp_version version;
+    const char *bridge = ctx->argv[1];
+    const ovs_be16 prog = atoi(ctx->argv[2]);
+    const ovs_be16 map = atoi(ctx->argv[3]);
+
+    char **key_value_args = ctx->argv + 4;
+    int nb_args = ctx->argc - 4;
+
+    void *key, *value;
+    ovs_be16 key_size, value_size;
+
+    ofputil_get_map_key_value_size(nb_args, key_value_args, &key_size, &value_size);
+
+    if(key_size == 0 || value_size == 0) {
+        ovs_fatal(0, "Invalid format. Key or value is not provided.");
+    }
+
+    key = malloc(key_size);
+    value = malloc(value_size);
+
+    if(!key || !value) {
+        VLOG_ERR("Memory allocation for key or value failed.");
+        return;
+    }
+
+    int err = ofputil_map_parse_key_value(key_value_args, key, value, key_size, value_size);
+
+    if(err) {
+        VLOG_ERR("Error while parsing key/value bytes.");
+        return;
+    }
+
+    protocol = open_vconn_for_flow_mod(bridge, &vconn, usable_protocols);
+    version = ofputil_protocol_to_ofp_version(protocol);
+
+    request = ofputil_encode_update_map(version, prog, map,
+                                        key, value, key_size, value_size);
+
+    transact_noreply(vconn, request);
+    vconn_close(vconn);
+
+    free(key);
+    free(value);
+
+}
+
 static const struct ovs_cmdl_command all_commands[] = {
     { "show", "switch",
       1, 1, ofctl_show },
@@ -4182,6 +4237,7 @@ static const struct ovs_cmdl_command all_commands[] = {
     { "parse-key-value", NULL, 1, INT_MAX, ofctl_parse_key_value },
 
     { "load-filter-prog", "id file [length]", 2, 3, ofctl_load_filter_prog },
+    { "update-map", "prog_id map_id key value", 3, INT_MAX, ofctl_update_map },
 
     { NULL, NULL, 0, 0, NULL },
 };

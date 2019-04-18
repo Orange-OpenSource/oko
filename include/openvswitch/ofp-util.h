@@ -346,6 +346,17 @@ struct ofpbuf *ofputil_encode_load_filter_prog(enum ofp_version ofp_version,
                                             const ovs_be16 filter_prog,
                                             void* program,
                                             const size_t length);
+enum ofperr ofputil_decode_update_map(struct ol_update_map *msg,
+                                      void **key,
+                                      void **value,
+                                      const struct ofp_header *oh);
+void ofputil_get_map_key_value_size(int argc, char **args, ovs_be16 *key_size, ovs_be16 *value_size);
+int ofputil_map_parse_key_value(char **args, unsigned char *key,
+                                unsigned char *value, int key_size, int value_size);
+struct ofpbuf *ofputil_encode_update_map(enum ofp_version ofp_version,
+                                         const ovs_be16 prog, const ovs_be16 map,
+                                         void* key, void* value,
+                                         const size_t key_size, const size_t value_size);
 
 /* Flow stats or aggregate stats request, independent of protocol. */
 struct ofputil_flow_stats_request {
