@@ -190,6 +190,10 @@ enum ofpraw {
     OFPRAW_NXT_LOAD_FILTER_PROG,
     /* NXT 1.0+ (32): struct ol_update_map, uint8_t[]. */
     OFPRAW_NXT_UPDATE_MAP,
+    /* NXT 1.0+ (33): struct ol_dump_map_request, uint8_t[]. */
+    OFPRAW_NXT_DUMP_MAP_REQUEST,
+    /* NXT 1.0+ (34): struct ol_dump_map_reply, uint8_t[]. */
+    OFPRAW_NXT_DUMP_MAP_REPLY,
 
     /* OFPT 1.1-1.4 (15): struct ofp11_group_mod, uint8_t[8][]. */
     OFPRAW_OFPT11_GROUP_MOD,
@@ -721,6 +725,8 @@ enum ofptype {
     /* Orange extension. */
     OFPTYPE_LOAD_FILTER_PROG,         /* OFPRAW_NXT_LOAD_FILTER_PROG. */
     OFPTYPE_UPDATE_MAP,               /* OFPRAW_NXT_UPDATE_MAP. */
+    OFPTYPE_DUMP_MAP_REQUEST,               /* OFPRAW_NXT_DUMP_MAP_REQUEST. */
+    OFPTYPE_DUMP_MAP_REPLY,               /* OFPRAW_NXT_DUMP_MAP_REPLY. */
 };
 
 /* Decoding messages into OFPTYPE_* values. */
