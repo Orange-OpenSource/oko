@@ -51,6 +51,14 @@ NXST_FLOW reply (xid=0x4):
  cookie=0x0, duration=103.842s, table=0, n_packets=0, n_bytes=0, idle_age=103, in_port=2,actions=output:1
 # Drop (value=1) packets destined to IP 172.16.0.14 through map 0 of filter_prog 1.
 $ ovs-ofctl update-map br0 1 0 key 14 0 16 172 value 1 0 0 0
+# Show the content of map 0 of filter_prog 1. Use 'hex' flag to print in hexadecimal format.
+$ ovs-ofctl dump-map br0 1 0 hex
+NXT_DUMP_MAP_REPLY (xid=0x4):
+The map contains 1 element(s)
+Key: 
+0e 00 10 ac
+Value: 
+01 00 00 00
 ```
 
 License
@@ -86,6 +94,7 @@ relocation).
 switch, as an ELF file.
 - New `UPDATE_MAP` OpenFlow message to write entry (key-value pair) to the BPF
 map of the given BPF program.
+- New `DUMP_MAP` OpenFlow message to dump the BPF map of the given BPF program.
 - New `SEND_MAPS` action and message to send the content of maps to the
 controller.
 - New filter program chain structure in the datapath to cache a succession of
@@ -97,6 +106,8 @@ Contacts
 Paul Chaignon &lt;paul.chaignon@orange.com&gt;
 
 Tomasz Osiński &lt;tomasz.osinski2@orange.com&gt;
+
+Mateusz Kossakowski &lt;mateusz.kossakowski@orange.com&gt;
 
 [`README-original.md`]:README-original.md
 [`b63bf24`]:https://github.com/Orange-OpenSource/oko/commit/b63bf24882095cc45d3304455cc37e9df4a08c58

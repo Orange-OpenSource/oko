@@ -1884,6 +1884,73 @@ ofputil_encode_update_map(enum ofp_version ofp_version,
     return request;
 }
 
+enum ofperr
+ofputil_decode_dump_map_request(struct ol_dump_map_request *msg,
+                                const struct ofp_header *oh)
+{
+    enum ofperr error = 0;
+    struct ofpbuf b = ofpbuf_const_initializer(oh, ntohs(oh->length));
+    enum ofpraw raw = ofpraw_pull_assert(&b);
+    if (raw != OFPRAW_NXT_DUMP_MAP_REQUEST) {
+        return OFPERR_OFPBMC_BAD_TYPE;
+    }
+
+    struct ol_dump_map_request *buffer = ofpbuf_pull(&b,
+            sizeof(struct ol_dump_map_request));
+
+    msg->filter_prog = ntohs(buffer->filter_prog);
+    msg->map_id = ntohs(buffer->map_id);
+
+    return error;
+}
+
+struct ofpbuf *
+ofputil_encode_dump_map_request(enum ofp_version ofp_version,
+                          const ovs_be16 prog, const ovs_be16 map_id)
+{
+    struct ofpbuf *request;
+    struct ol_dump_map_request *msg;
+    request = ofpraw_alloc(OFPRAW_NXT_DUMP_MAP_REQUEST, ofp_version, 0);
+    ofpbuf_put_zeros(request, sizeof *msg);
+    msg = request->msg;
+    msg->filter_prog = htons(prog);
+    msg->map_id = htons(map_id);
+
+    return request;
+}
+
+struct ofpbuf *
+ofputil_encode_dump_map_reply(struct ol_dump_map_request *msg,
+                              const struct ofp_header *oh,
+                              const struct ubpf_map *map,
+                              void *data,
+                              unsigned int nb_elems)
+{
+    struct ofpbuf *output_buffer;
+    struct ol_dump_map_reply *dump_map_reply;
+
+    size_t data_size = (size_t) (nb_elems * (map->key_size + map->value_size));
+
+    output_buffer = ofpraw_alloc_reply(OFPRAW_NXT_DUMP_MAP_REPLY, oh,
+            data_size);
+
+    ofpbuf_put_zeros(output_buffer,
+            sizeof(struct ol_dump_map_reply));
+
+    dump_map_reply = output_buffer->msg;
+    dump_map_reply->filter_prog = msg->filter_prog;
+    dump_map_reply->map_id = msg->map_id;
+    dump_map_reply->key_size = map->key_size;
+    dump_map_reply->value_size = map->value_size;
+    dump_map_reply->nb_elems = nb_elems;
+
+    ofpbuf_put(output_buffer, data, data_size);
+
+    ofpmsg_update_length(output_buffer);
+
+    return output_buffer;
+}
+
 static enum ofperr
 ofputil_pull_bands(struct ofpbuf *msg, size_t len, uint16_t *n_bands,
                    struct ofpbuf *bands)

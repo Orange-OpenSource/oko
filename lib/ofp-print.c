@@ -3327,6 +3327,92 @@ ofp_print_nxst_ipfix_flow_reply(struct ds *string, const struct ofp_header *oh)
     }
 }
 
+static void
+ofp_print_hex(struct ds *string, void *arg, unsigned int n, const char *sep)
+{
+    unsigned char *data = arg;
+    unsigned int i;
+
+    for (i = 0; i < n; i++) {
+        const char *pfx = "";
+
+        if (!i)
+            /* nothing */;
+        else if (!(i % 16))
+            ds_put_cstr(string, "\n");
+        else if (!(i % 8))
+            ds_put_cstr(string, "  ");
+        else
+            pfx = sep;
+
+        ds_put_format(string, "%s%02x", i ? pfx : "", data[i]);
+    }
+}
+
+static void
+ofp_print_decimal(struct ds *string, void *arg, unsigned int n, const char *sep)
+{
+    unsigned char *data = arg;
+    unsigned int i;
+
+    for (i = 0; i < n; i++) {
+        const char *pfx = "";
+
+        if (!i)
+            /* nothing */;
+        else if (!(i % 16))
+            ds_put_cstr(string, "\n");
+        else if (!(i % 8))
+            ds_put_cstr(string, "  ");
+        else
+            pfx = sep;
+
+        ds_put_format(string, "%s%u", i ? pfx : "", data[i]);
+    }
+}
+
+static void
+ofp_print_dump_map_element(struct ds *string, struct ol_dump_map_reply *buffer, void *data, int verbosity)
+{
+    ds_put_cstr(string, "Key: \n");
+    if (verbosity < 2) {
+        ofp_print_hex(string, data, buffer->key_size, " ");
+    } else {
+        ofp_print_decimal(string, data, buffer->key_size, " ");
+    }
+    ds_put_cstr(string, "\n");
+    data += buffer->key_size;
+    ds_put_cstr(string, "Value: \n");
+    if (verbosity < 2) {
+        ofp_print_hex(string, data, buffer->value_size, " ");
+    } else {
+        ofp_print_decimal(string, data, buffer->value_size, " ");
+    }
+    ds_put_cstr(string, "\n");
+}
+
+static void
+ofp_print_dump_map_reply(struct ds *string, const struct ofp_header *oh, int verbosity)
+{
+    struct ofpbuf b = ofpbuf_const_initializer(oh, ntohs(oh->length));
+    enum ofpraw raw = ofpraw_pull_assert(&b);
+    if (raw != OFPRAW_NXT_DUMP_MAP_REPLY) {
+        ds_put_cstr(string, "Wrong message reply!");
+        return;
+    }
+
+    struct ol_dump_map_reply *buffer = ofpbuf_pull(&b, sizeof(struct ol_dump_map_reply));
+    void *data = ofpbuf_pull(&b, buffer->nb_elems * (buffer->key_size + buffer->value_size));
+
+    ds_put_format(string, "\nThe map contains %d element(s)\n", buffer->nb_elems);
+
+    int element_size = buffer->key_size + buffer->value_size;
+    for(int i = 0; i < buffer->nb_elems; i++) {
+        ofp_print_dump_map_element(string, buffer, data, verbosity);
+        data += element_size;
+    }
+}
+
 
 static void
 ofp_to_string__(const struct ofp_header *oh, enum ofpraw raw,
@@ -3630,6 +3716,9 @@ ofp_to_string__(const struct ofp_header *oh, enum ofpraw raw,
         break;
     case OFPTYPE_IPFIX_FLOW_STATS_REPLY:
         ofp_print_nxst_ipfix_flow_reply(string, oh);
+        break;
+    case OFPTYPE_DUMP_MAP_REPLY:
+        ofp_print_dump_map_reply(string, oh, verbosity);
         break;
     }
 }

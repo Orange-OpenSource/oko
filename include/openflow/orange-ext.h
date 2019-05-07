@@ -53,4 +53,23 @@ struct ol_update_map {
                                    entries (key + value). */
 };
 OFP_ASSERT(sizeof(struct ol_update_map) == 16);
+
+struct ol_dump_map_request {
+    ovs_be16 filter_prog;  /* Filter program ID. */
+    ovs_be16 map_id; /* Map ID. */
+};
+OFP_ASSERT(sizeof(struct ol_dump_map_request) == 4);
+
+struct ol_dump_map_reply {
+    ovs_be16 filter_prog;  /* Filter program ID. */
+    ovs_be16 map_id; /* Map ID. */
+    ovs_be32 key_size;
+    ovs_be32 value_size;
+    ovs_be32 nb_elems;
+    /* Followed by:
+     *   - Exactly nb_elems * (key_size + value_size) bytes. */
+    /* uint8_t entries[...]; */ /* Data containing the map entries (key + value). */
+};
+OFP_ASSERT(sizeof(struct ol_dump_map_reply) == 16);
+
 #endif /* openflow/orange-ext.h */

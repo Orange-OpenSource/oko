@@ -38,6 +38,7 @@
     ++v; })
 
 void *ubpf_hashmap_create(const struct ubpf_map_def *map_def);
+unsigned int ubpf_hashmap_dump(const struct ubpf_map *map, void **data);
 void *ubpf_hashmap_lookup(const struct ubpf_map *map, const void *key);
 int ubpf_hashmap_update(struct ubpf_map *map, const void *key, void *value);
 int ubpf_hashmap_delete(struct ubpf_map *map, const void *key);
@@ -56,6 +57,7 @@ struct hmap_elem {
 };
 
 static const struct ubpf_map_ops ubpf_hashmap_ops = {
+    .map_dump = ubpf_hashmap_dump,
     .map_lookup = ubpf_hashmap_lookup,
     .map_update = ubpf_hashmap_update,
     .map_delete = ubpf_hashmap_delete,

@@ -5621,6 +5621,63 @@ handle_update_map(struct ofconn *ofconn, const struct ofp_header *oh)
 }
 
 static enum ofperr
+handle_dump_map (struct ofconn *ofconn, const struct ofp_header *oh)
+{
+    struct ofproto *ofproto = ofconn_get_ofproto(ofconn);
+    enum ofperr error;
+    error = reject_slave_controller(ofconn);
+    if (error) {
+        return error;
+    }
+
+    struct ol_dump_map_request msg;
+    error = ofputil_decode_dump_map_request(&msg, oh);
+
+    if (error) {
+        return error;
+    }
+
+    struct ubpf_vm *vm = ubpf_vms_lookup(ofproto, msg.filter_prog);
+    if (!vm) {
+        VLOG_WARN_RL(&rl,
+                     "The referenced filter program could not be found.");
+        return OFPERR_OFPBRC_EPERM;
+    }
+
+    if (msg.map_id >= vm->nb_maps) {
+        VLOG_WARN_RL(&rl,
+                     "The map with provided identifier does not exist.");
+        return OFPERR_OFPBRC_EPERM;
+    }
+
+    const char *name = vm->ext_map_names[msg.map_id];
+    if(!name) {
+        VLOG_WARN_RL(&rl,
+                     "The map with the given ID does not exist.");
+        return OFPERR_OFPBRC_EPERM;
+    }
+
+    struct ubpf_map *map = ubpf_lookup_registered_map(vm, name);
+    if(!map) {
+        VLOG_WARN_RL(&rl,
+                     "The referenced map of filter prog could not be found.");
+        return OFPERR_OFPBRC_EPERM;
+    }
+
+    void *data = NULL;
+    unsigned int nb_elems = map->ops.map_dump(map, &data);
+
+    struct ofpbuf *output_buffer = ofputil_encode_dump_map_reply(&msg, oh, map,
+            data, nb_elems);
+
+    ofconn_send_reply(ofconn, output_buffer);
+
+    free(data);
+
+    return error;
+}
+
+static enum ofperr
 handle_role_request(struct ofconn *ofconn, const struct ofp_header *oh)
 {
     struct ofputil_role_request request;
@@ -7508,6 +7565,9 @@ handle_openflow__(struct ofconn *ofconn, const struct ofpbuf *msg)
     case OFPTYPE_UPDATE_MAP:
         return handle_update_map(ofconn, oh);
 
+    case OFPTYPE_DUMP_MAP_REQUEST:
+        return handle_dump_map(ofconn, oh);
+
     case OFPTYPE_GROUP_MOD:
         return handle_group_mod(ofconn, oh);
 
@@ -7631,6 +7691,7 @@ handle_openflow__(struct ofconn *ofconn, const struct ofpbuf *msg)
     case OFPTYPE_PACKET_IN:
     case OFPTYPE_FLOW_REMOVED:
     case OFPTYPE_PORT_STATUS:
+    case OFPTYPE_DUMP_MAP_REPLY:
     case OFPTYPE_BARRIER_REPLY:
     case OFPTYPE_QUEUE_GET_CONFIG_REPLY:
     case OFPTYPE_DESC_STATS_REPLY:
