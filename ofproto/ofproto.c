@@ -5564,17 +5564,10 @@ handle_update_map(struct ofconn *ofconn, const struct ofp_header *oh)
     }
 
     struct ol_update_map msg;
-    void *key = NULL;
-    void *value = NULL;
-    error = ofputil_decode_update_map(&msg, &key, &value, oh);
+    void *data = NULL;
+    error = ofputil_decode_update_map(&msg, &data, oh);
     if (error) {
         return error;
-    }
-
-    if(!msg.filter_prog) {
-        VLOG_WARN_RL(&rl,
-                     "The filter program identifier is not provided.");
-        return OFPERR_OFPBRC_EPERM;
     }
 
     struct ubpf_vm *vm = ubpf_vms_lookup(ofproto, msg.filter_prog);
@@ -5584,8 +5577,14 @@ handle_update_map(struct ofconn *ofconn, const struct ofp_header *oh)
         return OFPERR_OFPBRC_EPERM;
     }
 
-    const char *name = vm->ext_map_names[msg.map_id];
 
+    if (msg.map_id >= vm->nb_maps) {
+        VLOG_WARN_RL(&rl,
+                     "The map with provided identifier does not exist.");
+        return OFPERR_OFPBRC_EPERM;
+    }
+
+    const char *name = vm->ext_map_names[msg.map_id];
     if(!name) {
         VLOG_WARN_RL(&rl,
                      "The map with the given ID does not exist.");
@@ -5606,10 +5605,16 @@ handle_update_map(struct ofconn *ofconn, const struct ofp_header *oh)
         return OFPERR_OFPBRC_EPERM;
     }
 
-    if (ubpf_map_update(map, key, value) < 0) {
-        VLOG_WARN_RL(&rl,
-                     "The update map operation has failed.");
-        return OFPERR_OFPBRC_EPERM;
+    for(int i = 0; i < msg.nb_elems; i++) {
+        void *key = data;
+        data += msg.key_size;
+        void *value = data;
+        data += msg.value_size;
+        if (ubpf_map_update(map, key, value) < 0) {
+            VLOG_WARN_RL(&rl,
+                         "The update map operation has failed.");
+            return OFPERR_OFPBRC_EPERM;
+        }
     }
 
     return error;

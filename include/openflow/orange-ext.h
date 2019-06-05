@@ -45,9 +45,12 @@ struct ol_update_map {
     ovs_be16 map_id; /* Map ID. */
     ovs_be32 key_size;
     ovs_be32 value_size;
+    ovs_be32 nb_elems;
     /* Followed by:
-     *   - Exactly (key_size + value_size) bytes. */
-    /* uint8_t entries[...]; */ /* Data containing the map entries (key + value). */
+     *   - Exactly nb_elems tuples (key, value) of total
+     *     nb_elems * (key_size + value_size) bytes. */
+    /* uint8_t entries[...]; */ /* Data containing the map
+                                   entries (key + value). */
 };
-OFP_ASSERT(sizeof(struct ol_update_map) == 12);
+OFP_ASSERT(sizeof(struct ol_update_map) == 16);
 #endif /* openflow/orange-ext.h */

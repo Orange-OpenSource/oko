@@ -4054,6 +4054,69 @@ ofctl_load_filter_prog(struct ovs_cmdl_context *ctx)
     vconn_close(vconn);
 }
 
+void
+get_map_key_value_size(int argc, char **args, ovs_be16 *key_size,
+                       ovs_be16 *value_size)
+{
+
+    int k = 0;
+    int value_pos = 0;
+
+    // the "key" need to be provided as a first element
+    if(strncmp(args[k], "key", sizeof("key")) != 0) {
+        VLOG_ERR("Key keyword has not been found. "
+                 "The format of command is invalid.");
+        return;
+    }
+
+    while(k < argc && args[k]) {
+        if(strncmp(args[k], "value", sizeof("value")) == 0) {
+            value_pos = k;
+            break;
+        }
+        k++;
+    }
+
+    if (value_pos == 0) {
+        VLOG_ERR("Value keyword has not been found."
+                 "The format of command is invalid.");
+        return;
+    }
+
+    *key_size = (ovs_be16) value_pos - 1;
+    *value_size = (ovs_be16) argc - value_pos - 1;
+}
+
+int
+map_parse_key_value(char **args, unsigned char *key,
+                            unsigned char *value, int key_size, int value_size)
+{
+    int value_pos = key_size + 1;
+    unsigned int i = 0, base = 10;
+    char *endptr;
+
+    for(i = 0; i < key_size; i++) {
+        key[i] = strtoul(args[i+1], &endptr, base);
+        if (*endptr) {
+            VLOG_ERR("error parsing byte: %s", args[i+1]);
+            return -1;
+        }
+    }
+
+    args = args + value_pos;
+
+    for(i = 0; i < value_size; i++) {
+        value[i] = strtoul(args[i+1], &endptr, base);
+        if (*endptr) {
+            VLOG_ERR("error parsing byte: %s", args[i+1]);
+            return -1;
+        }
+    }
+
+    return 0;
+}
+
+
 static void
 ofctl_update_map(struct ovs_cmdl_context *ctx)
 {
@@ -4074,7 +4137,7 @@ ofctl_update_map(struct ovs_cmdl_context *ctx)
     void *key, *value;
     ovs_be16 key_size, value_size;
 
-    ofputil_get_map_key_value_size(nb_args, key_value_args, &key_size, &value_size);
+    get_map_key_value_size(nb_args, key_value_args, &key_size, &value_size);
 
     if(key_size == 0 || value_size == 0) {
         ovs_fatal(0, "Invalid format. Key or value is not provided.");
@@ -4088,9 +4151,7 @@ ofctl_update_map(struct ovs_cmdl_context *ctx)
         return;
     }
 
-    int err = ofputil_map_parse_key_value(key_value_args, key, value, key_size, value_size);
-
-    if(err) {
+    if(map_parse_key_value(key_value_args, key, value, key_size, value_size)) {
         VLOG_ERR("Error while parsing key/value bytes.");
         return;
     }
@@ -4099,14 +4160,13 @@ ofctl_update_map(struct ovs_cmdl_context *ctx)
     version = ofputil_protocol_to_ofp_version(protocol);
 
     request = ofputil_encode_update_map(version, prog, map,
-                                        key, value, key_size, value_size);
+                                        key, value, key_size, value_size, 1);
 
     transact_noreply(vconn, request);
     vconn_close(vconn);
 
     free(key);
     free(value);
-
 }
 
 static const struct ovs_cmdl_command all_commands[] = {
@@ -4237,7 +4297,8 @@ static const struct ovs_cmdl_command all_commands[] = {
     { "parse-key-value", NULL, 1, INT_MAX, ofctl_parse_key_value },
 
     { "load-filter-prog", "id file [length]", 2, 3, ofctl_load_filter_prog },
-    { "update-map", "prog_id map_id key value", 3, INT_MAX, ofctl_update_map },
+    { "update-map", "switch prog_id map_id key [key] value [value]",
+      7, INT_MAX, ofctl_update_map },
 
     { NULL, NULL, 0, 0, NULL },
 };
