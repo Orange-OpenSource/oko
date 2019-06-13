@@ -126,7 +126,7 @@ filter_prog_chain_free(struct ovs_list *filter_prog_chain)
     }
 }
 
-static void *
+void *
 ubpf_map_lookup(const struct ubpf_map *map, void *key)
 {
     if (OVS_UNLIKELY(!map)) {
@@ -160,7 +160,7 @@ struct ubpf_func_proto ubpf_map_lookup_proto = {
     .ret = MAP_VALUE_PTR | NULL_VALUE,
 };
 
-static int
+int
 ubpf_map_update(struct ubpf_map *map, const void *key, void *item)
 {
     if (OVS_UNLIKELY(!map)) {

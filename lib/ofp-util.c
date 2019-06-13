@@ -1811,6 +1811,79 @@ ofputil_encode_load_filter_prog(enum ofp_version ofp_version,
     return request;
 }
 
+enum ofperr
+ofputil_decode_update_map(struct ol_update_map *msg,
+                          void **data, const struct ofp_header *oh)
+{
+    enum ofperr error = 0;
+
+    struct ofpbuf b = ofpbuf_const_initializer(oh, ntohs(oh->length));
+    enum ofpraw raw = ofpraw_pull_assert(&b);
+    if (raw != OFPRAW_NXT_UPDATE_MAP) {
+        return OFPERR_OFPBMC_BAD_TYPE;
+    }
+
+    struct ol_update_map *buffer = ofpbuf_pull(&b, sizeof(struct ol_update_map));
+
+    msg->filter_prog = ntohs(buffer->filter_prog);
+    msg->map_id = ntohs(buffer->map_id);
+    msg->key_size = ntohl(buffer->key_size);
+    msg->value_size = ntohl(buffer->value_size);
+    msg->nb_elems = ntohl(buffer->nb_elems);
+
+    if(!msg->filter_prog) {
+        VLOG_WARN_RL(&bad_ofmsg_rl,
+                     "The filter program identifier is not provided.");
+        return OFPERR_OFPBRC_EPERM;
+    }
+
+    size_t data_size = (size_t) (msg->nb_elems * (msg->key_size + msg->value_size));
+    *data = ofpbuf_try_pull(&b, data_size);
+    if (!*data) {
+        VLOG_WARN_RL(&bad_ofmsg_rl, "size of provided map tuples is incorrect"
+                                    " (%"PRIu32")", data_size);
+        return OFPERR_OFPBMC_BAD_LEN;
+    }
+
+    return error;
+}
+
+struct ofpbuf *
+ofputil_encode_update_map(enum ofp_version ofp_version,
+                          const ovs_be16 prog, const ovs_be16 map,
+                          void* key, void* value,
+                          const size_t key_size,
+                          const size_t value_size,
+                          const ovs_be32 nb_elems)
+{
+    struct ofpbuf *request;
+    struct ol_update_map *msg;
+
+    if (nb_elems != 1) {
+        return NULL;
+    }
+
+    size_t length = (size_t) (nb_elems * (key_size + value_size));
+
+    request = ofpraw_alloc(OFPRAW_NXT_UPDATE_MAP, ofp_version, length);
+
+    ofpbuf_put_zeros(request, sizeof *msg);
+
+    msg = request->msg;
+    msg->filter_prog = htons(prog);
+    msg->map_id = htons(map);
+    msg->key_size = htonl(key_size);
+    msg->value_size = htonl(value_size);
+    msg->nb_elems = htonl(nb_elems);
+
+    ofpbuf_put(request, key, key_size);
+    ofpbuf_put(request, value, value_size);
+
+    ofpmsg_update_length(request);
+
+    return request;
+}
+
 static enum ofperr
 ofputil_pull_bands(struct ofpbuf *msg, size_t len, uint16_t *n_bands,
                    struct ofpbuf *bands)
@@ -10011,6 +10084,7 @@ ofputil_is_bundlable(enum ofptype type)
     case OFPTYPE_IPFIX_FLOW_STATS_REQUEST:
     case OFPTYPE_IPFIX_FLOW_STATS_REPLY:
     case OFPTYPE_LOAD_FILTER_PROG:
+    case OFPTYPE_UPDATE_MAP:
         break;
     }
 

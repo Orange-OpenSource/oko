@@ -29,10 +29,10 @@ vSwitch-DPDK]. No additional dependencies are required.
 How to use?
 -----------
 
-```
-# ovs-vsctl add-port br0 dpdk0 -- set Interface dpdk0 type=dpdk ofport_request=1
-# ovs-vsctl add-port br0 dpdk1 -- set Interface dpdk1 type=dpdk ofport_request=2
-# ovs-vsctl show
+```bash
+$ ovs-vsctl add-port br0 dpdk0 -- set Interface dpdk0 type=dpdk ofport_request=1
+$ ovs-vsctl add-port br0 dpdk1 -- set Interface dpdk1 type=dpdk ofport_request=2
+$ ovs-vsctl show
 509b64f2-a893-490a-9fd5-7582c29e8b89
     Bridge "br0"
         Port "dpdk0"
@@ -41,15 +41,17 @@ How to use?
         Port "dpdk1"
             Interface "dpdk1"
                 type: dpdk
-# clang -O2 -target bpf -c examples/bpf/rate-limiter.c -o /tmp/rate-limiter.o
-# ovs-ofctl load-filter-prog br0 1 /tmp/rate-limiter.o
-# ovs-ofctl add-flow br0 priority=1,in_port=1,filter_prog=1,actions=output:2
-# ovs-ofctl dump-flows br0
+$ clang -O2 -target bpf -c examples/bpf/stateless-firewall.c -o /tmp/stateless-firewall.o
+$ ovs-ofctl load-filter-prog br0 1 /tmp/stateless-firewall.o
+$ ovs-ofctl add-flow br0 priority=1,in_port=1,filter_prog=1,actions=output:2
+$ ovs-ofctl add-flow br0 priority=1,in_port=2,actions=output:1
+$ ovs-ofctl dump-flows br0
 NXST_FLOW reply (xid=0x4):
  cookie=0x0, duration=103.730s, table=0, n_packets=0, n_bytes=0, idle_age=103, priority=1,in_port=1,filter_prog=1 actions=output:2
- cookie=0x0, duration=103.842s, table=0, n_packets=0, n_bytes=0, idle_age=103, priority=0 actions=NORMAL
+ cookie=0x0, duration=103.842s, table=0, n_packets=0, n_bytes=0, idle_age=103, in_port=2,actions=output:1
+# Drop (value=1) packets destined to IP 172.16.0.14 through map 0 of filter_prog 1.
+$ ovs-ofctl update-map br0 1 0 key 14 0 16 172 value 1 0 0 0
 ```
-
 
 License
 -------
@@ -82,6 +84,8 @@ relocation).
 - New `filter_prog` match field in OpenFlow table.
 - New `LOAD_FILTER_PROG` OpenFlow message to send a BPF program to load to the
 switch, as an ELF file.
+- New `UPDATE_MAP` OpenFlow message to write entry (key-value pair) to the BPF
+map of the given BPF program.
 - New `SEND_MAPS` action and message to send the content of maps to the
 controller.
 - New filter program chain structure in the datapath to cache a succession of
@@ -91,6 +95,8 @@ Contacts
 --------
 
 Paul Chaignon &lt;paul.chaignon@orange.com&gt;
+
+Tomasz Osiński &lt;tomasz.osinski2@orange.com&gt;
 
 [`README-original.md`]:README-original.md
 [`b63bf24`]:https://github.com/Orange-OpenSource/oko/commit/b63bf24882095cc45d3304455cc37e9df4a08c58

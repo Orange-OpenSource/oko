@@ -118,9 +118,10 @@ EXTRA_DIST = \
 	Vagrantfile \
 	Vagrantfile-FreeBSD \
 	examples/bpf/dapper.c \
+	examples/bpf/stateless-firewall.c \
 	examples/bpf/p0f.c \
 	examples/bpf/rate-limiter.c \
-	examples/bpf/sffw.c
+	examples/bpf/stateful-firewall.c
 bin_PROGRAMS =
 sbin_PROGRAMS =
 bin_SCRIPTS =
