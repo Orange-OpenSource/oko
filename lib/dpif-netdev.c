@@ -1512,6 +1512,10 @@ dpif_netdev_port_query_by_name(const struct dpif *dpif, const char *devname,
 static void
 dp_netdev_flow_free(struct dp_netdev_flow *flow)
 {
+    struct ovs_list *fp_chain = CONST_CAST(struct ovs_list *,
+                                           flow->cr.filter_prog_chain);
+    filter_prog_chain_free(fp_chain);
+    flow->cr.filter_prog_chain = NULL;
     dp_netdev_actions_free(dp_netdev_flow_get_actions(flow));
     free(flow);
 }
@@ -1543,10 +1547,6 @@ dp_netdev_pmd_remove_flow(struct dp_netdev_pmd_thread *pmd,
                                    fp->fp_instance_id);
         }
     }
-
-    struct ovs_list *fp_chain = CONST_CAST(struct ovs_list *,
-                                           flow->cr.filter_prog_chain);
-    filter_prog_chain_free(fp_chain);
 
     dpcls_remove(&pmd->cls, &flow->cr);
     cmap_remove(&pmd->flow_table, node, dp_netdev_flow_hash(&flow->ufid));
