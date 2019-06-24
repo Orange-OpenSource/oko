@@ -4182,12 +4182,7 @@ ofctl_dump_map(struct ovs_cmdl_context *ctx)
     const char *bridge = ctx->argv[1];
     const ovs_be16 prog = atoi(ctx->argv[2]);
     const ovs_be16 map_id = atoi(ctx->argv[3]);
-    int verbosity = 3;
-    if (ctx->argc > 4) {
-        if (strcmp(ctx->argv[4], "hex") == 0) {
-            verbosity = 0;
-        }
-    }
+    bool hex = ctx->argv[4] ? strcmp(ctx->argv[4], "hex") == 0 : false;
 
     protocol = open_vconn_for_flow_mod(bridge, &vconn, usable_protocols);
     version = ofputil_protocol_to_ofp_version(protocol);
@@ -4196,7 +4191,7 @@ ofctl_dump_map(struct ovs_cmdl_context *ctx)
     run(vconn_transact(vconn, request, &reply), "talking to %s",
         vconn_get_name(vconn));
 
-    ofp_print(stdout, reply->data, reply->size, verbosity);
+    ofp_print(stdout, reply->data, reply->size, hex);
 
     ofpbuf_delete(reply);
 

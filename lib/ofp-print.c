@@ -3372,10 +3372,10 @@ ofp_print_decimal(struct ds *string, void *arg, unsigned int n, const char *sep)
 }
 
 static void
-ofp_print_dump_map_element(struct ds *string, struct ol_dump_map_reply *buffer, void *data, int verbosity)
+ofp_print_dump_map_element(struct ds *string, struct ol_dump_map_reply *buffer, void *data, bool hex)
 {
     ds_put_cstr(string, "Key: \n");
-    if (verbosity < 2) {
+    if (hex) {
         ofp_print_hex(string, data, buffer->key_size, " ");
     } else {
         ofp_print_decimal(string, data, buffer->key_size, " ");
@@ -3383,7 +3383,7 @@ ofp_print_dump_map_element(struct ds *string, struct ol_dump_map_reply *buffer, 
     ds_put_cstr(string, "\n");
     data += buffer->key_size;
     ds_put_cstr(string, "Value: \n");
-    if (verbosity < 2) {
+    if (hex) {
         ofp_print_hex(string, data, buffer->value_size, " ");
     } else {
         ofp_print_decimal(string, data, buffer->value_size, " ");
@@ -3392,7 +3392,7 @@ ofp_print_dump_map_element(struct ds *string, struct ol_dump_map_reply *buffer, 
 }
 
 static void
-ofp_print_dump_map_reply(struct ds *string, const struct ofp_header *oh, int verbosity)
+ofp_print_dump_map_reply(struct ds *string, const struct ofp_header *oh, bool hex)
 {
     struct ofpbuf b = ofpbuf_const_initializer(oh, ntohs(oh->length));
     enum ofpraw raw = ofpraw_pull_assert(&b);
@@ -3408,7 +3408,7 @@ ofp_print_dump_map_reply(struct ds *string, const struct ofp_header *oh, int ver
 
     int element_size = buffer->key_size + buffer->value_size;
     for(int i = 0; i < buffer->nb_elems; i++) {
-        ofp_print_dump_map_element(string, buffer, data, verbosity);
+        ofp_print_dump_map_element(string, buffer, data, hex);
         data += element_size;
     }
 }
