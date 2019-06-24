@@ -5664,7 +5664,8 @@ handle_dump_map (struct ofconn *ofconn, const struct ofp_header *oh)
         return OFPERR_OFPBRC_EPERM;
     }
 
-    void *data = NULL;
+    unsigned int map_size = map->ops.map_size(map);
+    void *data = malloc(map_size * (map->key_size + map->value_size));
     unsigned int nb_elems = map->ops.map_dump(map, &data);
 
     struct ofpbuf *output_buffer = ofputil_encode_dump_map_reply(&msg, oh, map,

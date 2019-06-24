@@ -61,6 +61,13 @@ static inline struct hmap_elem* lookup_elem_raw(struct ovs_list *head,
 }
 
 unsigned int
+ubpf_hashmap_size(const struct ubpf_map *map)
+{
+    struct hashmap *hmap = map->data;
+    return hmap->count;
+}
+
+unsigned int
 ubpf_hashmap_dump(const struct ubpf_map *map, void **data)
 {
     struct hashmap *hmap = map->data;
@@ -70,7 +77,6 @@ ubpf_hashmap_dump(const struct ubpf_map *map, void **data)
     int value_size = map->value_size;
     int key_rounded_size = round_up(map->key_size, 8);
 
-    *data = malloc(hmap->count * (key_size + value_size));
     void *tmp_data = *data;
     for(int j = 0; j < hmap->nb_buckets; j++) {
         head = hmap->buckets + j;
