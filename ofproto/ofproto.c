@@ -7550,7 +7550,6 @@ handle_openflow__(struct ofconn *ofconn, const struct ofpbuf *msg)
 
     error = ofptype_decode(&type, oh);
     if (error) {
-        VLOG_INFO("Był jakiś error");
         return error;
     }
     if (oh->version >= OFP13_VERSION && ofpmsg_is_stat_request(oh)
@@ -7558,7 +7557,6 @@ handle_openflow__(struct ofconn *ofconn, const struct ofpbuf *msg)
         /* We have no buffer implementation for multipart requests.
          * Report overflow for requests which consists of multiple
          * messages. */
-        VLOG_INFO("Ten drugi error");
         return OFPERR_OFPBRC_MULTIPART_BUFFER_OVERFLOW;
     }
 
@@ -7762,7 +7760,6 @@ handle_openflow(struct ofconn *ofconn, const struct ofpbuf *ofp_msg)
     enum ofperr error = handle_openflow__(ofconn, ofp_msg);
 
     if (error) {
-        VLOG_INFO("Error wysyłany");
         ofconn_send_error(ofconn, ofp_msg->data, error);
     }
     COVERAGE_INC(ofproto_recv_openflow);
