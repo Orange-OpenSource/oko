@@ -7592,7 +7592,6 @@ handle_openflow__(struct ofconn *ofconn, const struct ofpbuf *msg)
         return handle_update_map(ofconn, oh);
 
     case OFPTYPE_DUMP_MAP_REQUEST:
-        VLOG_INFO("Wszedlem przed handle dump map request");
         return handle_dump_map(ofconn, oh);
 
     case OFPTYPE_GROUP_MOD:
