@@ -4186,7 +4186,7 @@ ofctl_dump_map(struct ovs_cmdl_context *ctx)
 
     protocol = open_vconn_for_flow_mod(bridge, &vconn, usable_protocols);
     version = ofputil_protocol_to_ofp_version(protocol);
-    request = ofputil_encode_dump_map_request(version, prog, map_id);
+    request = ofputil_encode_dump_map_request(version, prog, 1, &map_id);
 
     run(vconn_transact(vconn, request, &reply), "talking to %s",
         vconn_get_name(vconn));

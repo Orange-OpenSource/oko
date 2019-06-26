@@ -190,7 +190,7 @@ enum ofpraw {
     OFPRAW_NXT_LOAD_FILTER_PROG,
     /* NXT 1.0+ (32): struct ol_update_map, uint8_t[]. */
     OFPRAW_NXT_UPDATE_MAP,
-    /* NXT 1.0+ (33): struct ol_dump_map_request. */
+    /* NXT 1.0+ (33): struct ol_dump_map_request, uint8_t[]. */
     OFPRAW_NXT_DUMP_MAP_REQUEST,
     /* NXT 1.0+ (34): struct ol_dump_map_reply, uint8_t[]. */
     OFPRAW_NXT_DUMP_MAP_REPLY,

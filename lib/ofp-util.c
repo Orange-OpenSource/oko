@@ -1886,6 +1886,7 @@ ofputil_encode_update_map(enum ofp_version ofp_version,
 
 enum ofperr
 ofputil_decode_dump_map_request(struct ol_dump_map_request *msg,
+                                const ovs_be16 **map_ids,
                                 const struct ofp_header *oh)
 {
     enum ofperr error = 0;
@@ -1899,22 +1900,45 @@ ofputil_decode_dump_map_request(struct ol_dump_map_request *msg,
             sizeof(struct ol_dump_map_request));
 
     msg->filter_prog = ntohs(buffer->filter_prog);
-    msg->map_id = ntohs(buffer->map_id);
+    msg->nb_maps = ntohs(buffer->nb_maps);
+
+    if(!msg->filter_prog) {
+        VLOG_WARN_RL(&bad_ofmsg_rl,
+                     "The filter program identifier is not provided.");
+        return OFPERR_OFPBRC_EPERM;
+    }
+
+    size_t map_ids_size = (size_t)(sizeof(**map_ids) * msg->nb_maps);
+    *map_ids = ofpbuf_try_pull(&b, map_ids_size);
+    if (!*map_ids) {
+        VLOG_WARN_RL(&bad_ofmsg_rl, "size of provided map identifiers array is incorrect"
+                                    " (%"PRIu32")", map_ids_size);
+        return OFPERR_OFPBMC_BAD_LEN;
+    }
 
     return error;
 }
 
 struct ofpbuf *
 ofputil_encode_dump_map_request(enum ofp_version ofp_version,
-                          const ovs_be16 prog, const ovs_be16 map_id)
+                                const ovs_be16 prog,
+                                const ovs_be16 nb_maps,
+                                const ovs_be16 *map_ids)
 {
     struct ofpbuf *request;
     struct ol_dump_map_request *msg;
-    request = ofpraw_alloc(OFPRAW_NXT_DUMP_MAP_REQUEST, ofp_version, 0);
+    size_t map_ids_size = (size_t)(sizeof(*map_ids) * nb_maps);
+
+    request = ofpraw_alloc(OFPRAW_NXT_DUMP_MAP_REQUEST, ofp_version, map_ids_size);
     ofpbuf_put_zeros(request, sizeof *msg);
+
     msg = request->msg;
     msg->filter_prog = htons(prog);
-    msg->map_id = htons(map_id);
+    msg->nb_maps = htons(nb_maps);
+
+    ofpbuf_put(request, map_ids, map_ids_size);
+
+    ofpmsg_update_length(request);
 
     return request;
 }
@@ -1922,29 +1946,43 @@ ofputil_encode_dump_map_request(enum ofp_version ofp_version,
 struct ofpbuf *
 ofputil_encode_dump_map_reply(struct ol_dump_map_request *msg,
                               const struct ofp_header *oh,
-                              const struct ubpf_map *map,
-                              void *data,
-                              unsigned int nb_elems)
+                              const struct ubpf_map **map,
+                              const ovs_be16 *map_ids,
+                              void **data,
+                              unsigned int *nb_elems)
 {
     struct ofpbuf *output_buffer;
     struct ol_dump_map_reply *dump_map_reply;
 
-    size_t data_size = (size_t) (nb_elems * (map->key_size + map->value_size));
+    size_t all_maps_size = 0;
+    for(int i = 0; i < msg->nb_maps; i++) {
+        all_maps_size += (size_t) sizeof(struct ol_dump_map);
+        all_maps_size += (size_t) (nb_elems[i] * (map[i]->key_size + map[i]->value_size));
+    }
 
     output_buffer = ofpraw_alloc_reply(OFPRAW_NXT_DUMP_MAP_REPLY, oh,
-            data_size);
+                                       all_maps_size);
 
     ofpbuf_put_zeros(output_buffer,
             sizeof(struct ol_dump_map_reply));
 
     dump_map_reply = output_buffer->msg;
     dump_map_reply->filter_prog = msg->filter_prog;
-    dump_map_reply->map_id = msg->map_id;
-    dump_map_reply->key_size = map->key_size;
-    dump_map_reply->value_size = map->value_size;
-    dump_map_reply->nb_elems = nb_elems;
+    dump_map_reply->nb_maps = msg->nb_maps;
 
-    ofpbuf_put(output_buffer, data, data_size);
+    for(int i = 0; i < msg->nb_maps; i++) {
+        struct ol_dump_map *dump_map = data[i];
+
+        dump_map->map_id = map_ids[i];
+        dump_map->key_size = map[i]->key_size;
+        dump_map->value_size = map[i]->value_size;
+        dump_map->nb_elems = nb_elems[i];
+
+        ofpbuf_put(output_buffer, dump_map, sizeof(*dump_map));
+
+        size_t map_data_size = (size_t) (nb_elems[i] * (map[i]->key_size + map[i]->value_size));
+        ofpbuf_put(output_buffer, data[i] + sizeof(*dump_map), map_data_size);
+    }
 
     ofpmsg_update_length(output_buffer);
 

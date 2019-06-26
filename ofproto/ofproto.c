@@ -5631,7 +5631,8 @@ handle_dump_map (struct ofconn *ofconn, const struct ofp_header *oh)
     }
 
     struct ol_dump_map_request msg;
-    error = ofputil_decode_dump_map_request(&msg, oh);
+    const ovs_be16 *map_ids;
+    error = ofputil_decode_dump_map_request(&msg, &map_ids, oh);
 
     if (error) {
         return error;
@@ -5644,36 +5645,58 @@ handle_dump_map (struct ofconn *ofconn, const struct ofp_header *oh)
         return OFPERR_OFPBRC_EPERM;
     }
 
-    if (msg.map_id >= vm->nb_maps) {
+    if (msg.nb_maps <= 0) {
         VLOG_WARN_RL(&rl,
-                     "The map with provided identifier does not exist.");
+                     "Number of maps should be equal at least 1.");
         return OFPERR_OFPBRC_EPERM;
     }
 
-    const char *name = vm->ext_map_names[msg.map_id];
-    if(!name) {
-        VLOG_WARN_RL(&rl,
-                     "The map with the given ID does not exist.");
-        return OFPERR_OFPBRC_EPERM;
+    struct ubpf_map **maps = malloc(msg.nb_maps * sizeof(struct ubpf_map *));
+    for(int i = 0; i < msg.nb_maps; i++) {
+        if (map_ids[i] >= vm->nb_maps) {
+            VLOG_WARN_RL(&rl,
+                         "The map with provided identifier does not exist.");
+            return OFPERR_OFPBRC_EPERM;
+        }
+
+        const char *name = vm->ext_map_names[map_ids[i]];
+        if (!name) {
+            VLOG_WARN_RL(&rl,
+                         "The map with the given ID does not exist.");
+            return OFPERR_OFPBRC_EPERM;
+        }
+
+        maps[i] = ubpf_lookup_registered_map(vm, name);
+        if (!maps[i]) {
+            VLOG_WARN_RL(&rl,
+                         "The referenced map of filter prog could not be found.");
+            free(maps);
+            return OFPERR_OFPBRC_EPERM;
+        }
     }
 
-    struct ubpf_map *map = ubpf_lookup_registered_map(vm, name);
-    if(!map) {
-        VLOG_WARN_RL(&rl,
-                     "The referenced map of filter prog could not be found.");
-        return OFPERR_OFPBRC_EPERM;
+    void **data = malloc(msg.nb_maps * sizeof(void *));
+    unsigned int *nb_elems = malloc(msg.nb_maps * sizeof(unsigned int));
+    for(int i = 0; i < msg.nb_maps; i++) {
+        unsigned int map_data_size = (maps[i]->ops.map_size(maps[i]) *
+                                     (maps[i]->key_size + maps[i]->value_size)) +
+                                      sizeof(struct ol_dump_map);
+        data[i] = malloc(map_data_size);
+        nb_elems[i] = maps[i]->ops.map_dump(maps[i],
+                                            data[i] + sizeof(struct ol_dump_map));
     }
 
-    unsigned int map_size = map->ops.map_size(map);
-    void *data = malloc(map_size * (map->key_size + map->value_size));
-    unsigned int nb_elems = map->ops.map_dump(map, &data);
-
-    struct ofpbuf *output_buffer = ofputil_encode_dump_map_reply(&msg, oh, map,
-            data, nb_elems);
-
+    struct ofpbuf *output_buffer = ofputil_encode_dump_map_reply(&msg, oh, maps,
+                                                                 map_ids, data,
+                                                                 nb_elems);
     ofconn_send_reply(ofconn, output_buffer);
 
+    for (int i = 0; i < msg.nb_maps; i++) {
+        free(data[i]);
+    }
     free(data);
+    free(maps);
+    free(nb_elems);
 
     return error;
 }
@@ -7527,6 +7550,7 @@ handle_openflow__(struct ofconn *ofconn, const struct ofpbuf *msg)
 
     error = ofptype_decode(&type, oh);
     if (error) {
+        VLOG_INFO("Był jakiś error");
         return error;
     }
     if (oh->version >= OFP13_VERSION && ofpmsg_is_stat_request(oh)
@@ -7534,6 +7558,7 @@ handle_openflow__(struct ofconn *ofconn, const struct ofpbuf *msg)
         /* We have no buffer implementation for multipart requests.
          * Report overflow for requests which consists of multiple
          * messages. */
+        VLOG_INFO("Ten drugi error");
         return OFPERR_OFPBRC_MULTIPART_BUFFER_OVERFLOW;
     }
 
@@ -7567,6 +7592,7 @@ handle_openflow__(struct ofconn *ofconn, const struct ofpbuf *msg)
         return handle_update_map(ofconn, oh);
 
     case OFPTYPE_DUMP_MAP_REQUEST:
+        VLOG_INFO("Wszedlem przed handle dump map request");
         return handle_dump_map(ofconn, oh);
 
     case OFPTYPE_GROUP_MOD:
@@ -7737,6 +7763,7 @@ handle_openflow(struct ofconn *ofconn, const struct ofpbuf *ofp_msg)
     enum ofperr error = handle_openflow__(ofconn, ofp_msg);
 
     if (error) {
+        VLOG_INFO("Error wysyłany");
         ofconn_send_error(ofconn, ofp_msg->data, error);
     }
     COVERAGE_INC(ofproto_recv_openflow);

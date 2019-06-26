@@ -3372,21 +3372,21 @@ ofp_print_decimal(struct ds *string, void *arg, unsigned int n, const char *sep)
 }
 
 static void
-ofp_print_dump_map_element(struct ds *string, struct ol_dump_map_reply *buffer, void *data, bool hex)
+ofp_print_dump_map_element(struct ds *string, struct ol_dump_map *map, void *data, bool hex)
 {
     ds_put_cstr(string, "Key: \n");
     if (hex) {
-        ofp_print_hex(string, data, buffer->key_size, " ");
+        ofp_print_hex(string, data, map->key_size, " ");
     } else {
-        ofp_print_decimal(string, data, buffer->key_size, " ");
+        ofp_print_decimal(string, data, map->key_size, " ");
     }
     ds_put_cstr(string, "\n");
-    data += buffer->key_size;
+    data += map->key_size;
     ds_put_cstr(string, "Value: \n");
     if (hex) {
-        ofp_print_hex(string, data, buffer->value_size, " ");
+        ofp_print_hex(string, data, map->value_size, " ");
     } else {
-        ofp_print_decimal(string, data, buffer->value_size, " ");
+        ofp_print_decimal(string, data, map->value_size, " ");
     }
     ds_put_cstr(string, "\n");
 }
@@ -3402,13 +3402,20 @@ ofp_print_dump_map_reply(struct ds *string, const struct ofp_header *oh, bool he
     }
 
     struct ol_dump_map_reply *buffer = ofpbuf_pull(&b, sizeof(struct ol_dump_map_reply));
-    void *data = ofpbuf_pull(&b, buffer->nb_elems * (buffer->key_size + buffer->value_size));
 
-    ds_put_format(string, "\nThe map contains %d element(s)\n", buffer->nb_elems);
+    if (buffer->nb_maps != 1) {
+        ds_put_format(string, "Ony 1 map is allowed not %d!", buffer->nb_maps);
+        return;
+    }
 
-    int element_size = buffer->key_size + buffer->value_size;
-    for(int i = 0; i < buffer->nb_elems; i++) {
-        ofp_print_dump_map_element(string, buffer, data, hex);
+    struct ol_dump_map *map =  ofpbuf_pull(&b, sizeof(struct ol_dump_map));
+    int element_size = map->key_size + map->value_size;
+    void *data = ofpbuf_pull(&b, map->nb_elems * (element_size));
+
+    ds_put_format(string, "\nThe map contains %d element(s)\n", map->nb_elems);
+
+    for(int i = 0; i < map->nb_elems; i++) {
+        ofp_print_dump_map_element(string, map, data, hex);
         data += element_size;
     }
 }

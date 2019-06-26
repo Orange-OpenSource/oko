@@ -68,7 +68,7 @@ ubpf_hashmap_size(const struct ubpf_map *map)
 }
 
 unsigned int
-ubpf_hashmap_dump(const struct ubpf_map *map, void **data)
+ubpf_hashmap_dump(const struct ubpf_map *map, void *data)
 {
     struct hashmap *hmap = map->data;
     const struct ovs_list *head;
@@ -77,7 +77,7 @@ ubpf_hashmap_dump(const struct ubpf_map *map, void **data)
     int value_size = map->value_size;
     int key_rounded_size = round_up(map->key_size, 8);
 
-    void *tmp_data = *data;
+    void *tmp_data = data;
     for(int j = 0; j < hmap->nb_buckets; j++) {
         head = hmap->buckets + j;
 

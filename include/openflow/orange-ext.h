@@ -56,13 +56,26 @@ OFP_ASSERT(sizeof(struct ol_update_map) == 16);
 
 struct ol_dump_map_request {
     ovs_be16 filter_prog;  /* Filter program ID. */
-    ovs_be16 map_id; /* Map ID. */
+    ovs_be16 nb_maps;
+    /* Followed by:
+     *   - Exactly nb_maps map_ids of total nb_maps * 2(ovs_be16) bytes. */
+    /* uint8_t entries[...]; */ /* Data containing the map ids. */
 };
 OFP_ASSERT(sizeof(struct ol_dump_map_request) == 4);
 
 struct ol_dump_map_reply {
     ovs_be16 filter_prog;  /* Filter program ID. */
-    ovs_be16 map_id; /* Map ID. */
+    ovs_be16 nb_maps;
+    /* Followed by:
+     *   - Exactly nb_maps ol_dump_maps of total
+     *     nb_maps * ol_dump_map bytes. */
+    /* uint8_t entries[...]; */ /* Data containing the ol_dump_maps. */
+};
+OFP_ASSERT(sizeof(struct ol_dump_map_reply) == 4);
+
+struct ol_dump_map {
+    ovs_be16 map_id;  /* Map ID. */
+    uint8_t pad[2];
     ovs_be32 key_size;
     ovs_be32 value_size;
     ovs_be32 nb_elems;
@@ -70,6 +83,6 @@ struct ol_dump_map_reply {
      *   - Exactly nb_elems * (key_size + value_size) bytes. */
     /* uint8_t entries[...]; */ /* Data containing the map entries (key + value). */
 };
-OFP_ASSERT(sizeof(struct ol_dump_map_reply) == 16);
+OFP_ASSERT(sizeof(struct ol_dump_map) == 16);
 
 #endif /* openflow/orange-ext.h */
