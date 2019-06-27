@@ -5651,7 +5651,7 @@ handle_dump_map (struct ofconn *ofconn, const struct ofp_header *oh)
         return OFPERR_OFPBRC_EPERM;
     }
 
-    struct ubpf_map **maps = malloc(msg.nb_maps * sizeof(struct ubpf_map *));
+    struct ubpf_map *maps[msg.nb_maps];
     for(int i = 0; i < msg.nb_maps; i++) {
         if (map_ids[i] >= vm->nb_maps) {
             VLOG_WARN_RL(&rl,
@@ -5675,8 +5675,8 @@ handle_dump_map (struct ofconn *ofconn, const struct ofp_header *oh)
         }
     }
 
-    void **data = malloc(msg.nb_maps * sizeof(void *));
-    unsigned int *nb_elems = malloc(msg.nb_maps * sizeof(unsigned int));
+    void *data[msg.nb_maps];
+    unsigned int nb_elems[msg.nb_maps];
     for(int i = 0; i < msg.nb_maps; i++) {
         unsigned int map_data_size = (maps[i]->ops.map_size(maps[i]) *
                                      (maps[i]->key_size + maps[i]->value_size)) +
@@ -5694,9 +5694,6 @@ handle_dump_map (struct ofconn *ofconn, const struct ofp_header *oh)
     for (int i = 0; i < msg.nb_maps; i++) {
         free(data[i]);
     }
-    free(data);
-    free(maps);
-    free(nb_elems);
 
     return error;
 }
