@@ -58,7 +58,7 @@ struct ol_dump_map_request {
     ovs_be16 filter_prog;  /* Filter program ID. */
     ovs_be16 nb_maps;
     /* Followed by:
-     *   - Exactly nb_maps map_ids of total nb_maps * 2(ovs_be16) bytes. */
+     *   - Exactly nb_maps map_ids of total nb_maps * ovs_be16 bytes. */
     /* uint8_t entries[...]; */ /* Data containing the map ids. */
 };
 OFP_ASSERT(sizeof(struct ol_dump_map_request) == 4);
