@@ -3404,7 +3404,7 @@ ofp_print_dump_map_reply(struct ds *string, const struct ofp_header *oh, bool he
     struct ol_dump_map_reply *buffer = ofpbuf_pull(&b, sizeof(struct ol_dump_map_reply));
 
     if (buffer->nb_maps != 1) {
-        ds_put_format(string, "Ony 1 map is allowed not %d!", buffer->nb_maps);
+        ds_put_format(string, "Only 1 map is allowed not %d!", buffer->nb_maps);
         return;
     }
 

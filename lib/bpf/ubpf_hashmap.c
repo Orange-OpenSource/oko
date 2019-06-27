@@ -77,19 +77,18 @@ ubpf_hashmap_dump(const struct ubpf_map *map, void *data)
     int value_size = map->value_size;
     int key_rounded_size = round_up(map->key_size, 8);
 
-    void *tmp_data = data;
     for(int j = 0; j < hmap->nb_buckets; j++) {
         head = hmap->buckets + j;
 
         LIST_FOR_EACH(element, hash_node, head) {
             if (element != NULL) {
                 void *key_pointer = element->key;
-                memcpy(tmp_data, key_pointer, key_size);
-                tmp_data += key_size;
+                memcpy(data, key_pointer, key_size);
+                data += key_size;
 
                 void *value_pointer = key_pointer + key_rounded_size;
-                memcpy(tmp_data, value_pointer, value_size);
-                tmp_data += value_size;
+                memcpy(data, value_pointer, value_size);
+                data += value_size;
             }
         }
     }
