@@ -5655,22 +5655,33 @@ handle_dump_map (struct ofconn *ofconn, const struct ofp_header *oh)
     for(int i = 0; i < msg.nb_maps; i++) {
         if (map_ids[i] >= vm->nb_maps) {
             VLOG_WARN_RL(&rl,
-                         "The map with provided identifier does not exist.");
+                         "The map with identifier %"PRIu16" does not exist.", map_ids[i]);
             return OFPERR_OFPBRC_EPERM;
         }
 
         const char *name = vm->ext_map_names[map_ids[i]];
         if (!name) {
             VLOG_WARN_RL(&rl,
-                         "The map with the given ID does not exist.");
+                         "The map with the ID %"PRIu16" does not exist.", map_ids[i]);
             return OFPERR_OFPBRC_EPERM;
         }
 
         maps[i] = ubpf_lookup_registered_map(vm, name);
         if (!maps[i]) {
             VLOG_WARN_RL(&rl,
-                         "The referenced map of filter prog could not be found.");
-            free(maps);
+                         "The referenced map %s could not be found.", name);
+            return OFPERR_OFPBRC_EPERM;
+        }
+
+        if (!maps[i]->ops.map_size) {
+            VLOG_WARN_RL(&rl,
+                         "The referenced map %"PRIu16" does not have map_size method.", map_ids[i]);
+            return OFPERR_OFPBRC_EPERM;
+        }
+
+        if (!maps[i]->ops.map_dump) {
+            VLOG_WARN_RL(&rl,
+                         "The referenced map %"PRIu16" does not have map_dump method.", map_ids[i]);
             return OFPERR_OFPBRC_EPERM;
         }
     }
