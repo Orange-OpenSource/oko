@@ -1972,16 +1972,14 @@ ofputil_encode_dump_map_reply(struct ol_dump_map_request *msg,
 
     for(int i = 0; i < msg->nb_maps; i++) {
         struct ol_dump_map *dump_map = data[i];
+        size_t map_data_size = (size_t) (nb_elems[i] * (map[i]->key_size + map[i]->value_size));
 
         dump_map->map_id = map_ids[i];
         dump_map->key_size = map[i]->key_size;
         dump_map->value_size = map[i]->value_size;
         dump_map->nb_elems = nb_elems[i];
 
-        ofpbuf_put(output_buffer, dump_map, sizeof(*dump_map));
-
-        size_t map_data_size = (size_t) (nb_elems[i] * (map[i]->key_size + map[i]->value_size));
-        ofpbuf_put(output_buffer, data[i] + sizeof(*dump_map), map_data_size);
+        ofpbuf_put(output_buffer, data[i], sizeof(*dump_map) + map_data_size);
     }
 
     ofpmsg_update_length(output_buffer);
