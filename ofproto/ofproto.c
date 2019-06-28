@@ -5578,13 +5578,13 @@ handle_update_map(struct ofconn *ofconn, const struct ofp_header *oh)
     }
 
 
-    if (msg.map_id >= vm->nb_maps) {
+    if (msg.map >= vm->nb_maps) {
         VLOG_WARN_RL(&rl,
                      "The map with provided identifier does not exist.");
         return OFPERR_OFPBRC_EPERM;
     }
 
-    const char *name = vm->ext_map_names[msg.map_id];
+    const char *name = vm->ext_map_names[msg.map];
     if(!name) {
         VLOG_WARN_RL(&rl,
                      "The map with the given ID does not exist.");
@@ -5631,8 +5631,8 @@ handle_dump_map (struct ofconn *ofconn, const struct ofp_header *oh)
     }
 
     struct ol_dump_map_request msg;
-    const ovs_be16 *map_ids;
-    error = ofputil_decode_dump_map_request(&msg, &map_ids, oh);
+    const ovs_be16 *maps;
+    error = ofputil_decode_dump_map_request(&msg, &maps, oh);
 
     if (error) {
         return error;
@@ -5651,37 +5651,37 @@ handle_dump_map (struct ofconn *ofconn, const struct ofp_header *oh)
         return OFPERR_OFPBRC_EPERM;
     }
 
-    struct ubpf_map *maps[msg.nb_maps];
+    struct ubpf_map *ubpf_maps[msg.nb_maps];
     for(int i = 0; i < msg.nb_maps; i++) {
-        if (map_ids[i] >= vm->nb_maps) {
+        if (maps[i] >= vm->nb_maps) {
             VLOG_WARN_RL(&rl,
-                         "The map with identifier %"PRIu16" does not exist.", map_ids[i]);
+                         "The map with identifier %"PRIu16" does not exist.", maps[i]);
             return OFPERR_OFPBRC_EPERM;
         }
 
-        const char *name = vm->ext_map_names[map_ids[i]];
+        const char *name = vm->ext_map_names[maps[i]];
         if (!name) {
             VLOG_WARN_RL(&rl,
-                         "The map with the ID %"PRIu16" does not exist.", map_ids[i]);
+                         "The map with the ID %"PRIu16" does not exist.", maps[i]);
             return OFPERR_OFPBRC_EPERM;
         }
 
-        maps[i] = ubpf_lookup_registered_map(vm, name);
-        if (!maps[i]) {
+        ubpf_maps[i] = ubpf_lookup_registered_map(vm, name);
+        if (!ubpf_maps[i]) {
             VLOG_WARN_RL(&rl,
                          "The referenced map %s could not be found.", name);
             return OFPERR_OFPBRC_EPERM;
         }
 
-        if (!maps[i]->ops.map_size) {
+        if (!ubpf_maps[i]->ops.map_size) {
             VLOG_WARN_RL(&rl,
-                         "The referenced map %"PRIu16" does not have map_size method.", map_ids[i]);
+                         "The referenced map %"PRIu16" does not have map_size method.", maps[i]);
             return OFPERR_OFPBRC_EPERM;
         }
 
-        if (!maps[i]->ops.map_dump) {
+        if (!ubpf_maps[i]->ops.map_dump) {
             VLOG_WARN_RL(&rl,
-                         "The referenced map %"PRIu16" does not have map_dump method.", map_ids[i]);
+                         "The referenced map %"PRIu16" does not have map_dump method.", maps[i]);
             return OFPERR_OFPBRC_EPERM;
         }
     }
@@ -5689,16 +5689,16 @@ handle_dump_map (struct ofconn *ofconn, const struct ofp_header *oh)
     void *data[msg.nb_maps];
     unsigned int nb_elems[msg.nb_maps];
     for(int i = 0; i < msg.nb_maps; i++) {
-        unsigned int map_data_size = (maps[i]->ops.map_size(maps[i]) *
-                                     (maps[i]->key_size + maps[i]->value_size)) +
+        unsigned int map_data_size = (ubpf_maps[i]->ops.map_size(ubpf_maps[i]) *
+                                     (ubpf_maps[i]->key_size + ubpf_maps[i]->value_size)) +
                                       sizeof(struct ol_dump_map);
         data[i] = malloc(map_data_size);
-        nb_elems[i] = maps[i]->ops.map_dump(maps[i],
+        nb_elems[i] = ubpf_maps[i]->ops.map_dump(ubpf_maps[i],
                                             data[i] + sizeof(struct ol_dump_map));
     }
 
-    struct ofpbuf *output_buffer = ofputil_encode_dump_map_reply(&msg, oh, maps,
-                                                                 map_ids, data,
+    struct ofpbuf *output_buffer = ofputil_encode_dump_map_reply(&msg, oh, ubpf_maps,
+                                                                 maps, data,
                                                                  nb_elems);
     ofconn_send_reply(ofconn, output_buffer);
 

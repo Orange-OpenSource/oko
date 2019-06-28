@@ -4181,12 +4181,12 @@ ofctl_dump_map(struct ovs_cmdl_context *ctx)
 
     const char *bridge = ctx->argv[1];
     const ovs_be16 prog = atoi(ctx->argv[2]);
-    const ovs_be16 map_id = atoi(ctx->argv[3]);
+    const ovs_be16 map = atoi(ctx->argv[3]);
     bool hex = ctx->argv[4] ? strcmp(ctx->argv[4], "hex") == 0 : false;
 
     protocol = open_vconn_for_flow_mod(bridge, &vconn, usable_protocols);
     version = ofputil_protocol_to_ofp_version(protocol);
-    request = ofputil_encode_dump_map_request(version, prog, 1, &map_id);
+    request = ofputil_encode_dump_map_request(version, prog, 1, &map);
 
     run(vconn_transact(vconn, request, &reply), "talking to %s",
         vconn_get_name(vconn));

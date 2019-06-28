@@ -42,7 +42,7 @@ OFP_ASSERT(sizeof(struct ol_load_filter_prog) == 8);
 
 struct ol_update_map {
     ovs_be16 filter_prog;  /* Filter program ID. */
-    ovs_be16 map_id; /* Map ID. */
+    ovs_be16 map; /* Map ID. */
     ovs_be32 key_size;
     ovs_be32 value_size;
     ovs_be32 nb_elems;
@@ -74,7 +74,7 @@ struct ol_dump_map_reply {
 OFP_ASSERT(sizeof(struct ol_dump_map_reply) == 4);
 
 struct ol_dump_map {
-    ovs_be16 map_id;  /* Map ID. */
+    ovs_be16 map;  /* Map ID. */
     uint8_t pad[2];
     ovs_be32 key_size;
     ovs_be32 value_size;
