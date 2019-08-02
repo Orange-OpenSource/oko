@@ -6206,6 +6206,73 @@ OVS_EXCLUDED(ofproto_mutex)
     return error;
 }
 
+static enum ofperr
+handle_bpf_update_map(struct ofconn *ofconn, const struct ofp_header *oh)
+OVS_EXCLUDED(ofproto_mutex)
+{
+    struct ofproto *ofproto = ofconn_get_ofproto(ofconn);
+    enum ofperr error;
+    error = reject_slave_controller(ofconn);
+    if (error) {
+        return error;
+    }
+
+    struct ol_bpf_update_map msg;
+    void *data = NULL;
+    error = ofputil_decode_bpf_update_map(&msg, &data, oh);
+    if (error) {
+        return error;
+    }
+
+    struct ubpf_vm *vm = ofproto_get_ubpf_vm(ofproto, msg.prog_id);
+    if (!vm) {
+        VLOG_WARN_RL(&rl,
+                     "The referenced BPF program could not be found.");
+        return OFPERR_OFPBRC_EPERM;
+    }
+
+
+    if (msg.map_id >= vm->nb_maps) {
+        VLOG_WARN_RL(&rl,
+                     "The BPF map with provided identifier does not exist.");
+        return OFPERR_OFPBRC_EPERM;
+    }
+
+    const char *name = vm->ext_map_names[msg.map_id];
+    if(!name) {
+        VLOG_WARN_RL(&rl,
+                     "The BPF map with the given ID does not exist.");
+        return OFPERR_OFPBRC_EPERM;
+    }
+
+    struct ubpf_map *map = ubpf_lookup_registered_map(vm, name);
+
+    if(msg.key_size != map->key_size) {
+        VLOG_WARN_RL(&rl,
+                     "Size of key does not match to size of map's key");
+        return OFPERR_OFPBRC_EPERM;
+    }
+
+    if(msg.value_size != map->value_size) {
+        VLOG_WARN_RL(&rl,
+                     "Size of value does not match to size of map's value");
+        return OFPERR_OFPBRC_EPERM;
+    }
+
+    for(int i = 0; i < msg.nb_elems; i++) {
+        void *key = data;
+        data += msg.key_size;
+        void *value = data;
+        data += msg.value_size;
+        if (ubpf_map_update(map, key, value) < 0) {
+            VLOG_WARN_RL(&rl,
+                         "The update map operation has failed.");
+            return OFPERR_OFPBRC_EPERM;
+        }
+    }
+
+    return error;
+}
 
 static enum ofperr
 handle_role_request(struct ofconn *ofconn, const struct ofp_header *oh)
@@ -8484,6 +8551,9 @@ handle_single_part_openflow(struct ofconn *ofconn, const struct ofp_header *oh,
 
     case OFPTYPE_BPF_LOAD_PROG:
         return handle_bpf_load_prog(ofconn, oh);
+
+    case OFPTYPE_BPF_UPDATE_MAP:
+        return handle_bpf_update_map(ofconn, oh);
 
     case OFPTYPE_GROUP_MOD:
         return handle_group_mod(ofconn, oh);

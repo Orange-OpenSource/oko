@@ -203,6 +203,8 @@ enum ofpraw {
 
     /* NXT 1.0+ (32): struct ol_bpf_load_prog, uint8_t[]. */
     OFPRAW_NXT_BPF_LOAD_PROG,
+    /* NXT 1.0+ (33): struct ol_bpf_update_map, uint8_t[]. */
+    OFPRAW_NXT_BPF_UPDATE_MAP,
 
     /* OFPT 1.0 (15): struct ofp10_port_mod. */
     OFPRAW_OFPT10_PORT_MOD,
@@ -771,6 +773,7 @@ enum ofptype {
 
     /* Orange extension. */
     OFPTYPE_BPF_LOAD_PROG,         /* OFPRAW_NXT_BPF_LOAD_PROG. */
+    OFPTYPE_BPF_UPDATE_MAP,        /* OFPRAW_NXT_BPF_UPDATE_MAP. */
 };
 
 /* Decoding messages into OFPTYPE_* values. */

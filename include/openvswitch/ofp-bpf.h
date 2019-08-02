@@ -24,11 +24,22 @@ extern "C" {
 #endif
 
 enum ofperr ofputil_decode_bpf_load_prog(struct ol_bpf_load_prog *,
-                                            char **, const struct ofp_header *);
+                                         char **, const struct ofp_header *);
 struct ofpbuf *ofputil_encode_bpf_load_prog(enum ofp_version ofp_version,
-                                               const ovs_be16 prog_id,
-                                               void* program,
-                                               const size_t length);
+                                            const ovs_be16 prog_id,
+                                            void* program,
+                                            const size_t length);
+
+enum ofperr ofputil_decode_bpf_update_map(struct ol_bpf_update_map *msg,
+                                          void **data,
+                                          const struct ofp_header *oh);
+struct ofpbuf *ofputil_encode_bpf_update_map(enum ofp_version ofp_version,
+                                             const ovs_be16 prog,
+                                             const ovs_be16 map,
+                                             void* key, void* value,
+                                             const size_t key_size,
+                                             const size_t value_size,
+                                             const ovs_be32 nb_elems);
 
 #ifdef __cplusplus
 }

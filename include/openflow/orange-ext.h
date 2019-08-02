@@ -40,4 +40,28 @@ struct ol_bpf_load_prog {
 };
 OFP_ASSERT(sizeof(struct ol_bpf_load_prog) == 8);
 
+/*
+ * BPF_UPDATE_MAP.
+ *
+ * BPF_UPDATE_MAP allows to add a new map entry for the pre-defined map of the
+ * BPF program installed in Open vSwitch. The BPF program is referenced by
+ * program id and the map of the BPF program is referenced by map id.
+ *
+ * The application needs to provide at least one tuple (key, value) of
+ * the correct size. The size of key and value is specified in the BPF program.
+ */
+struct ol_bpf_update_map {
+    ovs_be16 prog_id;  /* BPF program ID. */
+    ovs_be16 map_id; /* Map ID. */
+    ovs_be32 key_size;
+    ovs_be32 value_size;
+    ovs_be32 nb_elems;
+    /* Followed by:
+     *   - Exactly nb_elems tuples (key, value) of total
+     *     nb_elems * (key_size + value_size) bytes. */
+    /* uint8_t entries[...]; */ /* Data containing the map
+                                   entries (key + value). */
+};
+OFP_ASSERT(sizeof(struct ol_bpf_update_map) == 16);
+
 #endif /* openflow/orange-ext.h */
