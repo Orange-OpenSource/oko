@@ -727,7 +727,6 @@ odp_execute_bpf_prog(struct dp_packet *packet, const struct nlattr *action) {
             nl_attr_get(action);
     struct ubpf_vm *bpf_prog = exec_bpf_prog->vm;
     if(bpf_prog) {
-        VLOG_INFO("BPF nb_maps: %d", exec_bpf_prog->vm->nb_maps);
         if(!execute_bpf_prog(packet, bpf_prog)) {
             dp_packet_delete(packet);
         }

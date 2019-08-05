@@ -92,6 +92,9 @@ EXTRA_DIST = \
 	$(MAN_ROOTS) \
 	Vagrantfile \
 	Vagrantfile-FreeBSD \
+	examples/tunneling/vlan.c \
+	examples/tunneling/mpls.c \
+	examples/tunneling/vxlan.c \
 	.mailmap
 bin_PROGRAMS =
 sbin_PROGRAMS =
