@@ -52,7 +52,7 @@ struct bpf_reg_state {
 struct bpf_state {
     struct ovs_list node;
     struct bpf_reg_state regs[NB_REGS];
-    enum ubpf_reg_type stack[STACK_SIZE];
+    struct bpf_reg_state stack[STACK_SIZE];
     uint32_t instno;
     uint64_t pkt_range;
 };
@@ -738,7 +738,7 @@ validate_call(const struct ubpf_vm *vm, struct bpf_state *state,
                     }
                     for (j = STACK_SIZE + min_val;
                          j < STACK_SIZE + min_val + size; j++) {
-                        if (state->stack[j] == UNINIT) {
+                        if (state->stack[j].type == UNINIT) {
                             *errmsg = ubpf_error("reading uninitialized stack "
                                                  "byte %d at PC %d", j,
                                                  state->instno);
@@ -1237,12 +1237,19 @@ validate_mem_access(struct bpf_state *state, uint8_t regno,
             if (t == WRITE) {
                 for (int i = STACK_SIZE + inst->offset;
                      i < STACK_SIZE + inst->offset + size; i++) {
-                    state->stack[i] = UNKNOWN;
+                    state->stack[i].type = UNKNOWN;
+                }
+                // Look for spilled register invalidated by this stack write.
+                for (int i = STACK_SIZE + inst->offset - 1; i < STACK_SIZE + inst->offset - 8; i--) {
+                    if (state->stack[i].type != UNINIT && state->stack[i].type != UNKNOWN) {
+                        state->stack[i].type = UNKNOWN;
+                        break;
+                    }
                 }
             } else {
                 for (int i = STACK_SIZE + inst->offset;
                      i < STACK_SIZE + inst->offset + size; i++) {
-                    if (state->stack[i] == UNINIT) {
+                    if (state->stack[i].type == UNINIT) {
                         *errmsg = ubpf_error("reading uninitialized stack byte"
                                              " at PC %d", state->instno);
                         return false;
@@ -1340,6 +1347,13 @@ validate_accesses(const struct ubpf_vm *vm,
                 if (!validate_mem_access(curr_state, inst.dst, &inst, WRITE,
                                          errmsg))
                     return false;
+                if (EBPF_SIZE(inst.opcode) == EBPF_SIZE_DW
+                    && curr_state->regs[inst.dst].type == STACK_PTR) {
+                    // Register spilling
+                    int stack_slot = STACK_SIZE + inst.offset;
+                    curr_state->stack[stack_slot] = curr_state->regs[inst.src];
+                    DEBUG("\tSpilled R%d to stack offset %d\n", inst.dst, stack_slot);
+                }
                 break;
 
             case EBPF_CLS_LD:
@@ -1366,9 +1380,17 @@ validate_accesses(const struct ubpf_vm *vm,
                 if (!validate_mem_access(curr_state, inst.src, &inst, READ,
                                          errmsg))
                     return false;
-                curr_state->regs[inst.dst].type = UNKNOWN;
-                curr_state->regs[inst.dst].min_val = REGISTER_MIN_RANGE;
-                curr_state->regs[inst.dst].max_val = REGISTER_MAX_RANGE;
+                if (EBPF_SIZE(inst.opcode) == EBPF_SIZE_DW
+                    && curr_state->regs[inst.src].type == STACK_PTR) {
+                    // Register spilling
+                    int stack_slot = STACK_SIZE + inst.offset;
+                    curr_state->regs[inst.dst] = curr_state->stack[stack_slot];
+                    DEBUG("\tLoaded R%d from stack offset %d\n", inst.dst, stack_slot);
+                } else {
+                    curr_state->regs[inst.dst].type = UNKNOWN;
+                    curr_state->regs[inst.dst].min_val = REGISTER_MIN_RANGE;
+                    curr_state->regs[inst.dst].max_val = REGISTER_MAX_RANGE;
+                }
                 break;
 
             case EBPF_CLS_ALU:
