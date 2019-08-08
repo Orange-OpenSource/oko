@@ -140,6 +140,8 @@ odp_action_len(uint16_t type)
     case OVS_ACTION_ATTR_PUSH_NSH: return ATTR_LEN_VARIABLE;
     case OVS_ACTION_ATTR_POP_NSH: return 0;
     case OVS_ACTION_ATTR_CHECK_PKT_LEN: return ATTR_LEN_VARIABLE;
+//    case OVS_ACTION_ATTR_EXECUTE_PROG: return sizeof(ovs_be16);
+        case OVS_ACTION_ATTR_EXECUTE_PROG: return ATTR_LEN_VARIABLE;
 
     case OVS_ACTION_ATTR_UNSPEC:
     case __OVS_ACTION_ATTR_MAX:
@@ -1229,6 +1231,9 @@ format_odp_action(struct ds *ds, const struct nlattr *a,
         break;
     case OVS_ACTION_ATTR_CHECK_PKT_LEN:
         format_odp_check_pkt_len_action(ds, a, portno_names);
+        break;
+    case OVS_ACTION_ATTR_EXECUTE_PROG:
+        ds_put_format(ds, "prog(%"PRIu16")", nl_attr_get_u16(a));
         break;
     case OVS_ACTION_ATTR_UNSPEC:
     case __OVS_ACTION_ATTR_MAX:
@@ -2509,6 +2514,16 @@ parse_odp_action__(struct parse_odp_context *context, const char *s,
             nl_msg_end_nested(actions, actions_ofs);
             nl_msg_end_nested(actions, cpl_ofs);
             return s[n + 1] == ')' ? n + 2 : -EINVAL;
+        }
+    }
+
+    {
+        ovs_be16 prog_id;
+        int n = -1;
+
+        if (ovs_scan(s, "prog(%"PRIu16")%n", &prog_id, &n)) {
+            nl_msg_put_u16(actions, OVS_ACTION_ATTR_EXECUTE_PROG, prog_id);
+            return n;
         }
     }
 

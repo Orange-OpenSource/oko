@@ -288,6 +288,8 @@ static void calc_duration(long long int start, long long int now,
 
 static struct ubpf_vm* ofproto_get_ubpf_vm(const struct ofproto *ofproto,
                                            const ovs_be16 prog_id);
+static bool ofproto_bpf_prog_exists(const struct ofproto *ofproto,
+                                    const ovs_be16 prog_id);
 
 /* ofproto. */
 static uint64_t pick_datapath_id(const struct ofproto *);
@@ -3492,6 +3494,11 @@ ofproto_check_ofpacts(struct ofproto *ofproto,
             return OFPERR_OFPBAC_BAD_OUT_GROUP;
         }
 
+        if (a->type == OFPACT_EXECUTE_PROG &&
+            !ofproto_bpf_prog_exists(ofproto,
+                                     ofpact_get_EXECUTE_PROG(a)->prog_id)) {
+            return OFPERR_OFPBAC_BAD_ARGUMENT;
+        }
     }
 
     return 0;
@@ -4229,6 +4236,12 @@ OVS_REQUIRES(ofproto_mutex)
 {
     hmap_insert(&ofproto->ubpf_vms, &vm->hmap_node,
                 hash_bytes(&vm->prog_id, 2, 0));
+}
+
+static bool
+ofproto_bpf_prog_exists(const struct ofproto *ofproto, const ovs_be16 prog_id)
+{
+    return ofproto_get_ubpf_vm(ofproto, prog_id) != NULL;
 }
 
 static struct ubpf_vm *

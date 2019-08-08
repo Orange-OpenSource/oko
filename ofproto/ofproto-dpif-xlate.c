@@ -22,6 +22,7 @@
 #include <arpa/inet.h>
 #include <net/if.h>
 #include <sys/socket.h>
+#include <lib/bpf/ubpf_int.h>
 
 #include "bfd.h"
 #include "bitmap.h"
@@ -5610,6 +5611,7 @@ reversible_actions(const struct ofpact *ofpacts, size_t ofpacts_len)
         case OFPACT_ENCAP:
         case OFPACT_DECAP:
         case OFPACT_DEC_NSH_TTL:
+        case OFPACT_EXECUTE_PROG:
             return false;
         }
     }
@@ -5910,6 +5912,7 @@ freeze_unroll_actions(const struct ofpact *a, const struct ofpact *end,
         case OFPACT_CT_CLEAR:
         case OFPACT_NAT:
         case OFPACT_CHECK_PKT_LARGER:
+        case OFPACT_EXECUTE_PROG:
             /* These may not generate PACKET INs. */
             break;
 
@@ -6212,6 +6215,34 @@ xlate_check_pkt_larger(struct xlate_ctx *ctx,
     ctx->conntracked = old_conntracked;
     ctx->xin->flow = old_flow;
     ctx->exit = true;
+}
+
+static uint32_t
+hash_bpf_prog(const ovs_be16 prog)
+{
+    return hash_bytes(&prog, 2, 0);
+}
+
+static void
+xlate_execute_prog_action(struct xlate_ctx *ctx,
+                          struct ofpact_execute_prog *execute_prog)
+{
+    struct ofproto *ofproto = &ctx->xin->ofproto->up;
+    struct ovs_action_execute_bpf_prog *execute_bpf_prog;
+
+    execute_bpf_prog = nl_msg_put_unspec_uninit(ctx->odp_actions,
+                             OVS_ACTION_ATTR_EXECUTE_PROG,
+                             sizeof *execute_bpf_prog);
+
+    ovs_be16 prog = execute_prog->prog_id;
+
+    struct ubpf_vm *vm = NULL;
+    uint32_t hash = hash_bpf_prog(prog);
+    HMAP_FOR_EACH_WITH_HASH (vm, hmap_node, hash, &ofproto->ubpf_vms) {
+        if (vm->prog_id == prog) {
+            execute_bpf_prog->vm = vm;
+        }
+    }
 }
 
 static void
@@ -6537,6 +6568,7 @@ recirc_for_mpls(const struct ofpact *a, struct xlate_ctx *ctx)
     case OFPACT_WRITE_METADATA:
     case OFPACT_GOTO_TABLE:
     case OFPACT_CHECK_PKT_LARGER:
+    case OFPACT_EXECUTE_PROG:
     default:
         break;
     }
@@ -7007,6 +7039,9 @@ do_xlate_actions(const struct ofpact *ofpacts, size_t ofpacts_len,
                                    remaining_acts, remaining_acts_len);
             break;
         }
+        case OFPACT_EXECUTE_PROG:
+            xlate_execute_prog_action(ctx, ofpact_get_EXECUTE_PROG(a));
+            break;
         }
 
         /* Check if need to store this and the remaining actions for later

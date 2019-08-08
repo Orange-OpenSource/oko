@@ -138,7 +138,8 @@ struct vl_mff_map;
     OFPACT(CLEAR_ACTIONS,   ofpact_null,        ofpact, "clear_actions") \
     OFPACT(WRITE_ACTIONS,   ofpact_nest,        actions, "write_actions") \
     OFPACT(WRITE_METADATA,  ofpact_metadata,    ofpact, "write_metadata") \
-    OFPACT(GOTO_TABLE,      ofpact_goto_table,  ofpact, "goto_table")
+    OFPACT(GOTO_TABLE,      ofpact_goto_table,  ofpact, "goto_table") \
+    OFPACT(EXECUTE_PROG,    ofpact_execute_prog,ofpact, "prog")
 
 /* enum ofpact_type, with a member OFPACT_<ENUM> for each action. */
 enum OVS_PACKED_ENUM ofpact_type {
@@ -1112,6 +1113,16 @@ struct ofpact_decap {
          * header's next protocol.
          */
         ovs_be32 new_pkt_type;
+    );
+};
+
+/* OFPACT_EXECUTE_PROG.
+ *
+ * Used for OFPAT_EXECUTE_PROG. */
+struct ofpact_execute_prog {
+    OFPACT_PADDED_MEMBERS(
+        struct ofpact ofpact;
+        ovs_be16 prog_id;
     );
 };
 

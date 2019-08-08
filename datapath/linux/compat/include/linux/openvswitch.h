@@ -707,6 +707,19 @@ struct ovs_action_push_mpls {
 	__be16 mpls_ethertype; /* Either %ETH_P_MPLS_UC or %ETH_P_MPLS_MC */
 };
 
+#ifndef __KERNEL__
+/* Only used within userspace data path. */
+
+/**
+ * struct ovs_action_execute_bpf_prog - %OVS_ACTION_ATTR_EXECUTE_PROG action
+ * argument.
+ * @vm: The pointer to the uBPF VM (BPF program) to be executed as action.
+ */
+struct ovs_action_execute_bpf_prog {
+    struct ubpf_vm *vm;
+};
+#endif
+
 /**
  * struct ovs_action_push_vlan - %OVS_ACTION_ATTR_PUSH_VLAN action argument.
  * @vlan_tpid: Tag protocol identifier (TPID) to push.
@@ -987,9 +1000,11 @@ enum ovs_action_attr {
 	OVS_ACTION_ATTR_CHECK_PKT_LEN, /* Nested OVS_CHECK_PKT_LEN_ATTR_*. */
 
 #ifndef __KERNEL__
+    OVS_ACTION_ATTR_EXECUTE_PROG, /* struct ovs_action_execute_bpf_prog. */
 	OVS_ACTION_ATTR_TUNNEL_PUSH,   /* struct ovs_action_push_tnl*/
 	OVS_ACTION_ATTR_TUNNEL_POP,    /* u32 port number. */
 #endif
+
 	__OVS_ACTION_ATTR_MAX,	      /* Nothing past this will be accepted
 				       * from userspace. */
 

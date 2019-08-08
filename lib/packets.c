@@ -34,6 +34,10 @@
 #include "odp-util.h"
 #include "dp-packet.h"
 #include "unaligned.h"
+#include "bpf.h"
+#include "openvswitch/vlog.h"
+
+VLOG_DEFINE_THIS_MODULE(packets);
 
 const struct in6_addr in6addr_exact = IN6ADDR_EXACT_INIT;
 const struct in6_addr in6addr_all_hosts = IN6ADDR_ALL_HOSTS_INIT;
@@ -478,6 +482,13 @@ pop_nsh(struct dp_packet *packet)
         /* Packet must be recirculated for further processing. */
     }
     return true;
+}
+
+bool
+execute_bpf_prog(struct dp_packet *packet, struct ubpf_vm *vm)
+{
+    VLOG_INFO("Execute BPF prog %d.", vm->prog_id);
+    return run_bpf_prog(packet, vm);
 }
 
 /* Converts hex digits in 'hex' to an Ethernet packet in '*packetp'.  The

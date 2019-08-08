@@ -262,6 +262,7 @@ enum ofp_raw_action_type {
     /* OF1.5+(29): uint32_t. */
     OFPAT_RAW15_METER,
 
+
 /* ## ------------------------- ## */
 /* ## Nicira extension actions. ## */
 /* ## ------------------------- ## */
@@ -360,6 +361,9 @@ enum ofp_raw_action_type {
 
     /* NX1.0+(49): struct nx_action_check_pkt_larger, ... VLMFF */
     NXAST_RAW_CHECK_PKT_LARGER,
+
+    /* NX1.0+(50): struct nx_action_execute_prog. */
+    NXAST_RAW_EXECUTE_PROG,
 
 /* ## ------------------ ## */
 /* ## Debugging actions. ## */
@@ -500,6 +504,7 @@ ofpact_next_flattened(const struct ofpact *ofpact)
     case OFPACT_DECAP:
     case OFPACT_DEC_NSH_TTL:
     case OFPACT_CHECK_PKT_LARGER:
+    case OFPACT_EXECUTE_PROG:
         return ofpact_next(ofpact);
 
     case OFPACT_CLONE:
@@ -7579,7 +7584,65 @@ check_CHECK_PKT_LARGER(const struct ofpact_check_pkt_larger *a OVS_UNUSED,
 {
     return 0;
 }
-
+
+
+/* Execute BPF program action. */
+
+struct nx_action_execute_prog {
+    ovs_be16 type;              /* OFPAT_VENDOR. */
+    ovs_be16 len;               /* 8. */
+    ovs_be32 vendor;            /* NX_VENDOR_ID. */
+    ovs_be16 subtype;           /* NXAST_EXECUTE_PROG. */
+    ovs_be16 prog_id;           /* Set BPF prog to execute. */
+    /* Followed by:
+     * - Enough 0-bytes to pad the action out to 16 bytes. */
+    uint8_t pad[4];
+};
+OFP_ASSERT(sizeof(struct nx_action_execute_prog) == 16);
+
+static enum ofperr
+decode_NXAST_RAW_EXECUTE_PROG(const struct nx_action_execute_prog *nebp,
+                              enum ofp_version ofp_version OVS_UNUSED,
+                              struct ofpbuf *out)
+{
+    struct ofpact_execute_prog *oep;
+
+    oep = ofpact_put_EXECUTE_PROG(out);
+    oep->prog_id = ntohs(nebp->prog_id);
+
+    return 0;
+}
+
+static void
+encode_EXECUTE_PROG(const struct ofpact_execute_prog *execute_prog,
+                    enum ofp_version ofp_version OVS_UNUSED,
+                    struct ofpbuf *out)
+{
+    struct nx_action_execute_prog *nebp = put_NXAST_EXECUTE_PROG(out);
+    nebp->prog_id = htons(execute_prog->prog_id);
+}
+
+static void
+format_EXECUTE_PROG(const struct ofpact_execute_prog *a,
+                    const struct ofpact_format_params *fp)
+{
+    ds_put_format(fp->s, "%sprog:%s%"PRIu32,
+                  colors.param, colors.end, a->prog_id);
+}
+
+static char * OVS_WARN_UNUSED_RESULT
+parse_EXECUTE_PROG(char *arg OVS_UNUSED, const struct ofpact_parse_params *pp)
+{
+//    *pp->usable_protocols &= OFPUTIL_P_OF13_UP;
+    return str_to_u16(arg, "prog_id", &ofpact_put_EXECUTE_PROG(pp->ofpacts)->prog_id);
+}
+
+static enum ofperr
+check_EXECUTE_PROG(const struct ofpact_execute_prog *a OVS_UNUSED,
+                   const struct ofpact_check_params *cp OVS_UNUSED)
+{
+    return 0;
+}
 
 /* Goto-Table instruction. */
 
@@ -7868,6 +7931,7 @@ action_set_classify(const struct ofpact *a)
     case OFPACT_DEBUG_RECIRC:
     case OFPACT_DEBUG_SLOW:
     case OFPACT_CHECK_PKT_LARGER:
+    case OFPACT_EXECUTE_PROG: // TODO: consider if returning ACTION_SLOT_INVALID is correct.
         return ACTION_SLOT_INVALID;
 
     default:
@@ -8071,6 +8135,7 @@ ovs_instruction_type_from_ofpact_type(enum ofpact_type type,
     case OFPACT_DECAP:
     case OFPACT_DEC_NSH_TTL:
     case OFPACT_CHECK_PKT_LARGER:
+    case OFPACT_EXECUTE_PROG:
     default:
         return OVSINST_OFPIT11_APPLY_ACTIONS;
     }
@@ -8982,6 +9047,7 @@ ofpact_outputs_to_port(const struct ofpact *ofpact, ofp_port_t port)
     case OFPACT_DECAP:
     case OFPACT_DEC_NSH_TTL:
     case OFPACT_CHECK_PKT_LARGER:
+    case OFPACT_EXECUTE_PROG:
     default:
         return false;
     }
