@@ -332,7 +332,23 @@ lib_libopenvswitch_la_SOURCES = \
 	lib/lldp/lldpd.c \
 	lib/lldp/lldpd.h \
 	lib/lldp/lldpd-structs.c \
-	lib/lldp/lldpd-structs.h
+	lib/lldp/lldpd-structs.h \
+	lib/bpf/ubpf.h \
+	lib/bpf/ebpf.h \
+	lib/bpf/ubpf_int.h \
+	lib/bpf/ubpf_vm.c \
+	lib/bpf/lookup3.c \
+	lib/bpf/lookup3.h \
+	lib/bpf/ubpf_jit_x86_64.c \
+	lib/bpf/ubpf_jit_x86_64.h \
+	lib/bpf/ubpf_array.c \
+	lib/bpf/ubpf_bf.c \
+	lib/bpf/ubpf_countmin.c \
+	lib/bpf/ubpf_hashmap.c \
+	lib/bpf/ubpf_hashmap.h \
+	lib/bpf/ubpf_loader.c \
+	lib/bpf.c \
+	lib/bpf.h
 
 if WIN32
 lib_libopenvswitch_la_SOURCES += \

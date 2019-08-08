@@ -63,6 +63,11 @@ struct Bad_arg_to_ARRAY_SIZE {
 #define __ARRAY_SIZE(ARRAY) __ARRAY_SIZE_NOCHECK(ARRAY)
 #endif
 
+typedef enum OVS_PACKED_ENUM {
+    BPF_UNKNOWN = 0,
+    BPF_MATCH,
+    BPF_NO_MATCH,
+} bpf_result;
 
 /* This system's cache line size, in bytes.
  * Being wrong hurts performance but not correctness. */
