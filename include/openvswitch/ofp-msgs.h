@@ -201,6 +201,9 @@ enum ofpraw {
     /* OFPT 1.5+ (15): struct ofp15_group_mod, uint8_t[8][]. */
     OFPRAW_OFPT15_GROUP_MOD,
 
+    /* NXT 1.0+ (32): struct ol_bpf_load_prog, uint8_t[]. */
+    OFPRAW_NXT_BPF_LOAD_PROG,
+
     /* OFPT 1.0 (15): struct ofp10_port_mod. */
     OFPRAW_OFPT10_PORT_MOD,
     /* OFPT 1.1-1.3 (16): struct ofp11_port_mod. */
@@ -765,6 +768,9 @@ enum ofptype {
     OFPTYPE_FLOW_MONITOR_CANCEL,        /* OFPRAW_NXT_FLOW_MONITOR_CANCEL. */
     OFPTYPE_FLOW_MONITOR_PAUSED,        /* OFPRAW_NXT_FLOW_MONITOR_PAUSED. */
     OFPTYPE_FLOW_MONITOR_RESUMED,       /* OFPRAW_NXT_FLOW_MONITOR_RESUMED. */
+
+    /* Orange extension. */
+    OFPTYPE_BPF_LOAD_PROG,         /* OFPRAW_NXT_BPF_LOAD_PROG. */
 };
 
 /* Decoding messages into OFPTYPE_* values. */

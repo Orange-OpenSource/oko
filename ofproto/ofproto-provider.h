@@ -108,6 +108,9 @@ struct ofproto {
     ovs_version_t tables_version;  /* Controls which rules are visible to
                                     * table lookups. */
 
+    /* uBPF VMs indexed on their BPF program ids. */
+    struct hmap ubpf_vms;
+
     /* Rules indexed on their cookie values, in all flow tables. */
     struct hindex cookies OVS_GUARDED_BY(ofproto_mutex);
     struct hmap learned_cookies OVS_GUARDED_BY(ofproto_mutex);

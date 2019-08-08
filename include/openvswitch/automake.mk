@@ -33,6 +33,7 @@ openvswitchinclude_HEADERS = \
 	include/openvswitch/ofp-queue.h \
 	include/openvswitch/ofp-switch.h \
 	include/openvswitch/ofp-table.h \
+	include/openvswitch/ofp-bpf.h \
 	include/openvswitch/ofp-util.h \
 	include/openvswitch/packets.h \
 	include/openvswitch/poll-loop.h \

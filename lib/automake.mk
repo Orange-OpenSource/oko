@@ -182,6 +182,7 @@ lib_libopenvswitch_la_SOURCES = \
 	lib/ofp-queue.c \
 	lib/ofp-switch.c \
 	lib/ofp-table.c \
+	lib/ofp-bpf.c \
 	lib/ofp-util.c \
 	lib/ofp-version-opt.h \
 	lib/ofp-version-opt.c \

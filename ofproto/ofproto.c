@@ -37,6 +37,7 @@
 #include "ofproto.h"
 #include "ofproto-provider.h"
 #include "openflow/nicira-ext.h"
+#include "openflow/orange-ext.h"
 #include "openflow/openflow.h"
 #include "openvswitch/dynamic-string.h"
 #include "openvswitch/meta-flow.h"
@@ -48,6 +49,7 @@
 #include "openvswitch/ofp-monitor.h"
 #include "openvswitch/ofp-print.h"
 #include "openvswitch/ofp-queue.h"
+#include "openvswitch/ofp-bpf.h"
 #include "openvswitch/ofp-util.h"
 #include "openvswitch/ofpbuf.h"
 #include "openvswitch/vlog.h"
@@ -66,6 +68,7 @@
 #include "unaligned.h"
 #include "unixctl.h"
 #include "util.h"
+#include "bpf.h"
 
 VLOG_DEFINE_THIS_MODULE(ofproto);
 
@@ -282,6 +285,9 @@ static enum ofperr handle_flow_mod__(struct ofproto *,
     OVS_EXCLUDED(ofproto_mutex);
 static void calc_duration(long long int start, long long int now,
                           uint32_t *sec, uint32_t *nsec);
+
+static struct ubpf_vm* ofproto_get_ubpf_vm(const struct ofproto *ofproto,
+                                           const ovs_be16 prog_id);
 
 /* ofproto. */
 static uint64_t pick_datapath_id(const struct ofproto *);
@@ -525,6 +531,7 @@ ofproto_create(const char *datapath_name, const char *datapath_type,
     ofproto->tables = NULL;
     ofproto->n_tables = 0;
     ofproto->tables_version = OVS_VERSION_MIN;
+    hmap_init(&ofproto->ubpf_vms);
     hindex_init(&ofproto->cookies);
     hmap_init(&ofproto->learned_cookies);
     ovs_list_init(&ofproto->expirable);
@@ -1612,6 +1619,8 @@ ofproto_destroy__(struct ofproto *ofproto)
         oftable_destroy(table);
     }
     free(ofproto->tables);
+
+    ovs_assert(hmap_is_empty(&ofproto->ubpf_vms));
 
     hmap_destroy(&ofproto->meters);
 
@@ -3482,6 +3491,7 @@ ofproto_check_ofpacts(struct ofproto *ofproto,
             && !ofproto_group_exists(ofproto, ofpact_get_GROUP(a)->group_id)) {
             return OFPERR_OFPBAC_BAD_OUT_GROUP;
         }
+
     }
 
     return 0;
@@ -4211,6 +4221,27 @@ handle_port_desc_stats_request(struct ofconn *ofconn,
         handle_port_request(ofconn, request, port_no, append_port_desc);
     }
     return error;
+}
+
+static void
+ubpf_vms_insert(struct ofproto *ofproto, struct ubpf_vm *vm)
+OVS_REQUIRES(ofproto_mutex)
+{
+    hmap_insert(&ofproto->ubpf_vms, &vm->hmap_node,
+                hash_bytes(&vm->prog_id, 2, 0));
+}
+
+static struct ubpf_vm *
+ofproto_get_ubpf_vm(const struct ofproto *ofproto, const ovs_be16 prog_id)
+{
+    struct ubpf_vm *vm = NULL;
+    uint32_t hash = hash_bytes(&prog_id, 2, 0);
+    HMAP_FOR_EACH_WITH_HASH (vm, hmap_node, hash, &ofproto->ubpf_vms) {
+        if (vm->prog_id == prog_id) {
+            return vm;
+        }
+    }
+    return NULL;
 }
 
 static uint32_t
@@ -6129,6 +6160,39 @@ handle_flow_mod__(struct ofproto *ofproto, const struct ofputil_flow_mod *fm,
 
     return error;
 }
+
+static enum ofperr
+handle_bpf_load_prog(struct ofconn *ofconn, const struct ofp_header *oh)
+OVS_EXCLUDED(ofproto_mutex)
+{
+    struct ofproto *ofproto = ofconn_get_ofproto(ofconn);
+    enum ofperr error;
+
+    error = reject_slave_controller(ofconn);
+    if (error) {
+        return error;
+    }
+
+    struct ol_bpf_load_prog msg;
+    char *elf_file = NULL;
+    error = ofputil_decode_bpf_load_prog(&msg, &elf_file, oh);
+    if (error) {
+        return error;
+    }
+
+    struct ubpf_vm *vm = create_ubpf_vm(msg.prog_id);
+    if (!load_bpf_prog(vm, msg.file_len, elf_file)) {
+        /* Not sure what else to return if the ELF file is malformed. */
+        ubpf_destroy(vm);
+        return OFPERR_OFPBRC_EPERM;
+    }
+    ovs_mutex_lock(&ofproto_mutex);
+    ubpf_vms_insert(ofproto, vm);
+    ovs_mutex_unlock(&ofproto_mutex);
+
+    return error;
+}
+
 
 static enum ofperr
 handle_role_request(struct ofconn *ofconn, const struct ofp_header *oh)
@@ -8404,6 +8468,9 @@ handle_single_part_openflow(struct ofconn *ofconn, const struct ofp_header *oh,
 
     case OFPTYPE_FLOW_MOD:
         return handle_flow_mod(ofconn, oh);
+
+    case OFPTYPE_BPF_LOAD_PROG:
+        return handle_bpf_load_prog(ofconn, oh);
 
     case OFPTYPE_GROUP_MOD:
         return handle_group_mod(ofconn, oh);

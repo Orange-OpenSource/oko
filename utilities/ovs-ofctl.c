@@ -61,6 +61,7 @@
 #include "openvswitch/ofp-queue.h"
 #include "openvswitch/ofp-switch.h"
 #include "openvswitch/ofp-table.h"
+#include "openvswitch/ofp-bpf.h"
 #include "openvswitch/ofpbuf.h"
 #include "openvswitch/shash.h"
 #include "openvswitch/vconn.h"
@@ -4952,6 +4953,54 @@ ofctl_parse_packet(struct ovs_cmdl_context *ctx OVS_UNUSED)
     free(packet_copy);
 }
 
+static void
+ofctl_load_bpf_prog(struct ovs_cmdl_context *ctx)
+{
+    struct ofpbuf *request;
+    struct vconn *vconn;
+    enum ofputil_protocol protocol;
+    enum ofputil_protocol usable_protocols = OFPUTIL_P_OF13_UP | OFPUTIL_P_OF10_NXM;
+    enum ofp_version version;
+    const char *bridge = ctx->argv[1];
+    const ovs_be16 prog_id = atoi(ctx->argv[2]);
+    const char *filename = ctx->argv[3];
+    size_t length;
+
+    FILE *stream = !strcmp(filename, "-") ? stdin : fopen(filename, "r");
+    if (stream == NULL) {
+        ovs_fatal(0, "%s: open failed", filename);
+    }
+
+    if (stream == stdin) {
+        if (ctx->argc < 5) {
+            ovs_fatal(0, "length required when reading from stdin");
+        }
+        length = atoi(ctx->argv[4]);
+    } else {
+        fseek(stream, 0L, SEEK_END);
+        length = ftell(stream);
+        fseek(stream, 0L, SEEK_SET);
+    }
+
+    char program[length];
+    size_t actual_length = fread(program, sizeof(char), length, stream);
+    if (actual_length < length) {
+        ovs_fatal(0, "filter program was shorter than announced");
+    }
+
+    if (stream != stdin) {
+        fclose(stream);
+    }
+
+    protocol = open_vconn_for_flow_mod(bridge, &vconn, usable_protocols);
+    version = ofputil_protocol_to_ofp_version(protocol);
+    request = ofputil_encode_bpf_load_prog(version, prog_id, program,
+                                              length);
+
+    transact_noreply(vconn, request);
+    vconn_close(vconn);
+}
+
 static const struct ovs_cmdl_command all_commands[] = {
     { "show", "switch",
       1, 1, ofctl_show, OVS_RO },
@@ -5088,6 +5137,8 @@ static const struct ovs_cmdl_command all_commands[] = {
     { "parse-key-value", NULL, 1, INT_MAX, ofctl_parse_key_value, OVS_RW },
     { "compose-packet", NULL, 1, 2, ofctl_compose_packet, OVS_RO },
     { "parse-packet", NULL, 0, 0, ofctl_parse_packet, OVS_RO },
+
+    { "load-bpf-prog", "id file [length]", 2, 3, ofctl_load_bpf_prog, OVS_RW },
 
     { NULL, NULL, 0, 0, NULL, OVS_RO },
 };

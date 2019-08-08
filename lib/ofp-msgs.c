@@ -19,6 +19,7 @@
 #include "hash.h"
 #include "openvswitch/hmap.h"
 #include "openflow/nicira-ext.h"
+#include "openflow/orange-ext.h"
 #include "openflow/openflow.h"
 #include "openvswitch/dynamic-string.h"
 #include "openvswitch/ofp-msgs.h"
