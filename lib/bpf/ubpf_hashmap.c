@@ -60,6 +60,42 @@ static inline struct hmap_elem* lookup_elem_raw(struct ovs_list *head,
     return NULL;
 }
 
+unsigned int
+ubpf_hashmap_size(const struct ubpf_map *map)
+{
+    struct hashmap *hmap = map->data;
+    return hmap->count;
+}
+
+unsigned int
+ubpf_hashmap_dump(const struct ubpf_map *map, void *data)
+{
+    struct hashmap *hmap = map->data;
+    const struct ovs_list *head;
+    struct hmap_elem *element;
+    int key_size = map->key_size;
+    int value_size = map->value_size;
+    int key_rounded_size = round_up(map->key_size, 8);
+
+    for(int j = 0; j < hmap->nb_buckets; j++) {
+        head = hmap->buckets + j;
+
+        LIST_FOR_EACH(element, hash_node, head) {
+            if (element != NULL) {
+                void *key_pointer = element->key;
+                memcpy(data, key_pointer, key_size);
+                data += key_size;
+
+                void *value_pointer = key_pointer + key_rounded_size;
+                memcpy(data, value_pointer, value_size);
+                data += value_size;
+            }
+        }
+    }
+
+    return hmap->count;
+}
+
 void *
 ubpf_hashmap_lookup(const struct ubpf_map *map, const void *key)
 {

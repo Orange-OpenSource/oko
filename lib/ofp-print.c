@@ -40,6 +40,7 @@
 #include "odp-util.h"
 #include "openflow/nicira-ext.h"
 #include "openflow/openflow.h"
+#include "openflow/orange-ext.h"
 #include "openvswitch/dynamic-string.h"
 #include "openvswitch/meta-flow.h"
 #include "openvswitch/ofp-actions.h"
@@ -949,6 +950,99 @@ ofp_print_nxt_ct_flush_zone(struct ds *string, const struct nx_zone_id *nzi)
     return 0;
 }
 
+static void
+ofp_print_hex(struct ds *string, void *arg, unsigned int n, const char *sep)
+{
+    unsigned char *data = arg;
+    unsigned int i;
+
+    for (i = 0; i < n; i++) {
+        const char *pfx = "";
+
+        if (!i)
+            /* nothing */;
+        else if (!(i % 16))
+            ds_put_cstr(string, "\n");
+        else if (!(i % 8))
+            ds_put_cstr(string, "  ");
+        else
+            pfx = sep;
+
+        ds_put_format(string, "%s%02x", i ? pfx : "", data[i]);
+    }
+}
+
+static void
+ofp_print_decimal(struct ds *string, void *arg, unsigned int n, const char *sep)
+{
+    unsigned char *data = arg;
+    unsigned int i;
+
+    for (i = 0; i < n; i++) {
+        const char *pfx = "";
+
+        if (!i)
+            /* nothing */;
+        else if (!(i % 16))
+            ds_put_cstr(string, "\n");
+        else if (!(i % 8))
+            ds_put_cstr(string, "  ");
+        else
+            pfx = sep;
+
+        ds_put_format(string, "%s%u", i ? pfx : "", data[i]);
+    }
+}
+
+static void
+ofp_print_bpf_dump_map_element(struct ds *string, struct ol_bpf_dump_map *map, void *data, bool hex)
+{
+    ds_put_cstr(string, "Key: ");
+    if (hex) {
+        ofp_print_hex(string, data, map->key_size, " ");
+    } else {
+        ofp_print_decimal(string, data, map->key_size, " ");
+    }
+    ds_put_cstr(string, "\n");
+    data += map->key_size;
+    ds_put_cstr(string, "Value: ");
+    if (hex) {
+        ofp_print_hex(string, data, map->value_size, " ");
+    } else {
+        ofp_print_decimal(string, data, map->value_size, " ");
+    }
+    ds_put_cstr(string, "\n");
+}
+
+static void
+ofp_print_bpf_dump_map_reply(struct ds *string, const struct ofp_header *oh, bool hex)
+{
+    struct ofpbuf b = ofpbuf_const_initializer(oh, ntohs(oh->length));
+    enum ofpraw raw = ofpraw_pull_assert(&b);
+    if (raw != OFPRAW_NXT_BPF_DUMP_MAP_REPLY) {
+        ds_put_cstr(string, "Wrong message reply!");
+        return;
+    }
+
+    struct ol_bpf_dump_map_reply *buffer = ofpbuf_pull(&b, sizeof(struct ol_bpf_dump_map_reply));
+
+    if (buffer->nb_maps != 1) {
+        ds_put_format(string, "Only 1 map is allowed not %d!", buffer->nb_maps);
+        return;
+    }
+
+    struct ol_bpf_dump_map *map = ofpbuf_pull(&b, sizeof(struct ol_bpf_dump_map));
+    int element_size = map->key_size + map->value_size;
+    void *data = ofpbuf_pull(&b, map->nb_elems * (element_size));
+
+    ds_put_format(string, "\nThe map contains %d element(s)\n", map->nb_elems);
+
+    for(int i = 0; i < map->nb_elems; i++) {
+        ofp_print_bpf_dump_map_element(string, map, data, hex);
+        data += element_size;
+    }
+}
+
 static enum ofperr
 ofp_to_string__(const struct ofp_header *oh,
                 const struct ofputil_port_map *port_map,
@@ -1184,6 +1278,10 @@ ofp_to_string__(const struct ofp_header *oh,
 
     case OFPTYPE_CT_FLUSH_ZONE:
         return ofp_print_nxt_ct_flush_zone(string, ofpmsg_body(oh));
+
+    case OFPTYPE_BPF_DUMP_MAP_REPLY:
+        ofp_print_bpf_dump_map_reply(string, oh, verbosity);
+        break;
     }
 
     return 0;

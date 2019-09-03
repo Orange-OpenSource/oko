@@ -24,6 +24,8 @@
 #include "openvswitch/ofp-errors.h"
 #include "openvswitch/ofp-print.h"
 #include "openvswitch/vlog.h"
+#include "bpf/ubpf_int.h"
+
 
 VLOG_DEFINE_THIS_MODULE(ofp_bpf);
 
@@ -152,6 +154,106 @@ ofputil_encode_bpf_update_map(enum ofp_version ofp_version,
     ofpmsg_update_length(request);
 
     return request;
+}
+
+enum ofperr
+ofputil_decode_bpf_dump_map_request(struct ol_bpf_dump_map_request *msg,
+                                const ovs_be16 **maps,
+                                const struct ofp_header *oh)
+{
+    enum ofperr error = 0;
+    struct ofpbuf b = ofpbuf_const_initializer(oh, ntohs(oh->length));
+    enum ofpraw raw = ofpraw_pull_assert(&b);
+    if (raw != OFPRAW_NXT_BPF_DUMP_MAP_REQUEST) {
+        return OFPERR_OFPBMC_BAD_TYPE;
+    }
+
+    struct ol_bpf_dump_map_request *buffer = ofpbuf_pull(&b,
+                                                     sizeof(struct ol_bpf_dump_map_request));
+
+    msg->prog = ntohs(buffer->prog);
+    msg->nb_maps = ntohs(buffer->nb_maps);
+
+    if(!msg->prog) {
+        VLOG_WARN_RL(&rl,
+                     "The filter program identifier is not provided.");
+        return OFPERR_OFPBRC_EPERM;
+    }
+
+    size_t maps_size = (size_t)(sizeof(**maps) * msg->nb_maps);
+    *maps = ofpbuf_try_pull(&b, maps_size);
+    if (!*maps) {
+        VLOG_WARN_RL(&rl, "size of provided map identifiers array is incorrect"
+                                    " (%"PRIu32")", maps_size);
+        return OFPERR_OFPBMC_BAD_LEN;
+    }
+
+    return error;
+}
+
+struct ofpbuf *
+ofputil_encode_bpf_dump_map_request(enum ofp_version ofp_version,
+                                const ovs_be16 prog,
+                                const ovs_be16 nb_maps,
+                                const ovs_be16 *maps)
+{
+    struct ofpbuf *request;
+    struct ol_bpf_dump_map_request *msg;
+    size_t maps_size = (size_t)(sizeof(*maps) * nb_maps);
+
+    request = ofpraw_alloc(OFPRAW_NXT_BPF_DUMP_MAP_REQUEST, ofp_version, maps_size);
+    ofpbuf_put_zeros(request, sizeof *msg);
+
+    msg = request->msg;
+    msg->prog = htons(prog);
+    msg->nb_maps = htons(nb_maps);
+
+    ofpbuf_put(request, maps, maps_size);
+
+    ofpmsg_update_length(request);
+
+    return request;
+}
+
+struct ofpbuf *
+ofputil_encode_bpf_dump_map_reply(struct ol_bpf_dump_map_request *msg,
+                              const struct ofp_header *oh,
+                              const struct ubpf_map **map,
+                              const ovs_be16 *maps,
+                              void **data,
+                              unsigned int *nb_elems)
+{
+    struct ofpbuf *output_buffer;
+    struct ol_bpf_dump_map_reply *dump_map_reply;
+
+    size_t all_maps_size = 0;
+    for(int i = 0; i < msg->nb_maps; i++) {
+        all_maps_size += sizeof(struct ol_bpf_dump_map);
+        all_maps_size += (size_t) (nb_elems[i] * (map[i]->key_size + map[i]->value_size));
+    }
+
+    output_buffer = ofpraw_alloc_reply(OFPRAW_NXT_BPF_DUMP_MAP_REPLY, oh,
+                                       all_maps_size);
+    ofpbuf_put_zeros(output_buffer, sizeof(struct ol_bpf_dump_map_reply));
+    dump_map_reply = output_buffer->msg;
+    dump_map_reply->prog = msg->prog;
+    dump_map_reply->nb_maps = msg->nb_maps;
+
+    for(int i = 0; i < msg->nb_maps; i++) {
+        struct ol_bpf_dump_map *dump_map = data[i];
+        size_t map_data_size = (size_t) (nb_elems[i] * (map[i]->key_size + map[i]->value_size));
+
+        dump_map->map = maps[i];
+        dump_map->key_size = map[i]->key_size;
+        dump_map->value_size = map[i]->value_size;
+        dump_map->nb_elems = nb_elems[i];
+
+        ofpbuf_put(output_buffer, data[i], sizeof(*dump_map) + map_data_size);
+    }
+
+    ofpmsg_update_length(output_buffer);
+
+    return output_buffer;
 }
 
 

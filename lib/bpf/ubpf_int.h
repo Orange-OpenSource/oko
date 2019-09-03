@@ -73,6 +73,8 @@ struct ubpf_map_def {
 struct ubpf_map;
 
 struct ubpf_map_ops {
+    unsigned int (*map_size)(const struct ubpf_map *map);
+    unsigned int (*map_dump)(const struct ubpf_map *map, void *data);
     void *(*map_lookup)(const struct ubpf_map *map, const void *key);
     int (*map_update)(struct ubpf_map *map, const void *key, void *value);
     int (*map_delete)(struct ubpf_map *map, const void *key);

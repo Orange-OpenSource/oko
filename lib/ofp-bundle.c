@@ -294,6 +294,8 @@ ofputil_is_bundlable(enum ofptype type)
     case OFPTYPE_CT_FLUSH_ZONE:
     case OFPTYPE_BPF_LOAD_PROG:
     case OFPTYPE_BPF_UPDATE_MAP:
+    case OFPTYPE_BPF_DUMP_MAP_REQUEST:
+    case OFPTYPE_BPF_DUMP_MAP_REPLY:
         break;
     }
 

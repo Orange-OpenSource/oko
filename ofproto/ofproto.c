@@ -6275,6 +6275,95 @@ OVS_EXCLUDED(ofproto_mutex)
 }
 
 static enum ofperr
+handle_dump_map (struct ofconn *ofconn, const struct ofp_header *oh)
+{
+    struct ofproto *ofproto = ofconn_get_ofproto(ofconn);
+    enum ofperr error;
+    error = reject_slave_controller(ofconn);
+    if (error) {
+        return error;
+    }
+
+    struct ol_bpf_dump_map_request msg;
+    const ovs_be16 *maps;
+    error = ofputil_decode_bpf_dump_map_request(&msg, &maps, oh);
+
+    if (error) {
+        return error;
+    }
+
+    struct ubpf_vm *vm = ofproto_get_ubpf_vm(ofproto, msg.prog);
+    if (!vm) {
+        VLOG_WARN_RL(&rl,
+                     "The referenced filter program could not be found.");
+        return OFPERR_OFPBRC_EPERM;
+    }
+
+    if (msg.nb_maps <= 0) {
+        VLOG_WARN_RL(&rl,
+                     "Number of maps should be equal at least 1.");
+        return OFPERR_OFPBRC_EPERM;
+    }
+
+    struct ubpf_map *ubpf_maps[msg.nb_maps];
+    for(int i = 0; i < msg.nb_maps; i++) {
+        if (maps[i] >= vm->nb_maps) {
+            VLOG_WARN_RL(&rl,
+                         "The map with identifier %"PRIu16" does not exist.", maps[i]);
+            return OFPERR_OFPBRC_EPERM;
+        }
+
+        const char *name = vm->ext_map_names[maps[i]];
+        if (!name) {
+            VLOG_WARN_RL(&rl,
+                         "The map with the ID %"PRIu16" does not exist.", maps[i]);
+            return OFPERR_OFPBRC_EPERM;
+        }
+
+        ubpf_maps[i] = ubpf_lookup_registered_map(vm, name);
+        if (!ubpf_maps[i]) {
+            VLOG_WARN_RL(&rl,
+                         "The referenced map %s could not be found.", name);
+            return OFPERR_OFPBRC_EPERM;
+        }
+
+        if (!ubpf_maps[i]->ops.map_size) {
+            VLOG_WARN_RL(&rl,
+                         "The referenced map %"PRIu16" does not have map_size method.", maps[i]);
+            return OFPERR_OFPBRC_EPERM;
+        }
+
+        if (!ubpf_maps[i]->ops.map_dump) {
+            VLOG_WARN_RL(&rl,
+                         "The referenced map %"PRIu16" does not have map_dump method.", maps[i]);
+            return OFPERR_OFPBRC_EPERM;
+        }
+    }
+
+    void *data[msg.nb_maps];
+    unsigned int nb_elems[msg.nb_maps];
+    for(int i = 0; i < msg.nb_maps; i++) {
+        unsigned int map_data_size = (ubpf_maps[i]->ops.map_size(ubpf_maps[i]) *
+                                      (ubpf_maps[i]->key_size + ubpf_maps[i]->value_size)) +
+                                     sizeof(struct ol_bpf_dump_map);
+        data[i] = malloc(map_data_size);
+        nb_elems[i] = ubpf_maps[i]->ops.map_dump(ubpf_maps[i],
+                                                 data[i] + sizeof(struct ol_bpf_dump_map));
+    }
+
+    struct ofpbuf *output_buffer = ofputil_encode_bpf_dump_map_reply(&msg, oh, ubpf_maps,
+                                                                 maps, data,
+                                                                 nb_elems);
+    ofconn_send_reply(ofconn, output_buffer);
+
+    for (int i = 0; i < msg.nb_maps; i++) {
+        free(data[i]);
+    }
+
+    return error;
+}
+
+static enum ofperr
 handle_role_request(struct ofconn *ofconn, const struct ofp_header *oh)
 {
     struct ofputil_role_request request;
@@ -8555,6 +8644,9 @@ handle_single_part_openflow(struct ofconn *ofconn, const struct ofp_header *oh,
     case OFPTYPE_BPF_UPDATE_MAP:
         return handle_bpf_update_map(ofconn, oh);
 
+    case OFPTYPE_BPF_DUMP_MAP_REQUEST:
+        return handle_dump_map(ofconn, oh);
+
     case OFPTYPE_GROUP_MOD:
         return handle_group_mod(ofconn, oh);
 
@@ -8680,6 +8772,7 @@ handle_single_part_openflow(struct ofconn *ofconn, const struct ofp_header *oh,
     case OFPTYPE_PACKET_IN:
     case OFPTYPE_FLOW_REMOVED:
     case OFPTYPE_PORT_STATUS:
+    case OFPTYPE_BPF_DUMP_MAP_REPLY:
     case OFPTYPE_BARRIER_REPLY:
     case OFPTYPE_QUEUE_GET_CONFIG_REPLY:
     case OFPTYPE_DESC_STATS_REPLY:

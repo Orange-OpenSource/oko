@@ -64,4 +64,62 @@ struct ol_bpf_update_map {
 };
 OFP_ASSERT(sizeof(struct ol_bpf_update_map) == 16);
 
+/*
+ * BPF_DUMP_MAP_REQUEST.
+ *
+ * BPF_DUMP_MAP_REQUEST allows to create request to dump all map entries
+ * for the all pre-defined maps of the BPF program installed in Open vSwitch.
+ * The BPF program is referenced by filter program id.
+ * Maps of BPF program are referenced by list of map ids
+ * of exactly nb_elems number.
+ *
+ * The application needs to provide at least one map id.
+ */
+struct ol_bpf_dump_map_request {
+    ovs_be16 prog;  /* BPF Filter program ID. */
+    ovs_be16 nb_maps;
+    /* Followed by:
+     *   - Exactly nb_maps map_ids of total nb_maps * ovs_be16 bytes. */
+    /* uint8_t entries[...]; */ /* Data containing the map ids. */
+};
+OFP_ASSERT(sizeof(struct ol_bpf_dump_map_request) == 4);
+
+/*
+ * BPF_DUMP_MAP_REPLY.
+ *
+ * BPF_DUMP_MAP_REPLY allows to create reply of all map entries for the all
+ * pre-defined maps of the BPF program installed in Open vSwitch.
+ * The BPF program is referenced by filter program id.
+ * Maps entries are referenced by list of ol_bpf_dump_map structures
+ * of exactly nb_maps number.
+ */
+struct ol_bpf_dump_map_reply {
+    ovs_be16 prog;  /* Filter program ID. */
+    ovs_be16 nb_maps;
+    /* Followed by:
+     *   - Exactly nb_maps ol_bpf_dump_maps of total
+     *     nb_maps * ol_bpf_dump_map bytes. */
+    /* uint8_t entries[...]; */ /* Data containing the ol_bpf_dump_maps. */
+};
+OFP_ASSERT(sizeof(struct ol_bpf_dump_map_reply) == 4);
+
+/*
+ * BPF_DUMP_MAP.
+ *
+ * BPF_DUMP_MAP keeps all map entries for the
+ * pre-defined map of the BPF program installed in Open vSwitch.
+ * The map of the BPF program is referenced by map id.
+ */
+struct ol_bpf_dump_map {
+    ovs_be16 map;  /* Map ID. */
+    uint8_t pad[2];
+    ovs_be32 key_size;
+    ovs_be32 value_size;
+    ovs_be32 nb_elems;
+    /* Followed by:
+     *   - Exactly nb_elems * (key_size + value_size) bytes. */
+    /* uint8_t entries[...]; */ /* Data containing the map entries (key + value). */
+};
+OFP_ASSERT(sizeof(struct ol_bpf_dump_map) == 16);
+
 #endif /* openflow/orange-ext.h */
