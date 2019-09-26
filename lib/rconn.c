@@ -1427,6 +1427,7 @@ is_admitted_msg(const struct ofpbuf *b)
     case OFPTYPE_IPFIX_FLOW_STATS_REPLY:
     case OFPTYPE_CT_FLUSH_ZONE:
     case OFPTYPE_BPF_LOAD_PROG:
+    case OFPTYPE_BPF_UNLOAD_PROG:
     case OFPTYPE_BPF_UPDATE_MAP:
     case OFPTYPE_BPF_DUMP_MAP_REQUEST:
     case OFPTYPE_BPF_DUMP_MAP_REPLY:

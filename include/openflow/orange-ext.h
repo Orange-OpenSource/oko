@@ -40,6 +40,18 @@ struct ol_bpf_load_prog {
 };
 OFP_ASSERT(sizeof(struct ol_bpf_load_prog) == 8);
 
+/* BPF_UNLOAD_PROG.
+ *
+ * BPF_UNLOAD_PROG allows applications to unload BPF program
+ * from Open vSwitch. Each BPF program is unloaded from a uBPF VM.
+ * OpenFlow rules can then reference these uBPF VMs by the BPF program id.
+ */
+struct ol_bpf_unload_prog {
+    ovs_be16 prog;  /* BPF program ID. */
+    uint8_t pad[2];        /* Align to 64-bits. */
+};
+OFP_ASSERT(sizeof(struct ol_bpf_unload_prog) == 4);
+
 /*
  * BPF_UPDATE_MAP.
  *

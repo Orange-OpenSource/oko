@@ -30,6 +30,11 @@ struct ofpbuf *ofputil_encode_bpf_load_prog(enum ofp_version ofp_version,
                                             void* program,
                                             const size_t length);
 
+enum ofperr ofputil_decode_bpf_unload_prog(struct ol_bpf_unload_prog *,
+                                           const struct ofp_header *);
+struct ofpbuf *ofputil_encode_bpf_unload_prog(enum ofp_version ofp_version,
+                                              const ovs_be16 prog);
+
 enum ofperr ofputil_decode_bpf_update_map(struct ol_bpf_update_map *msg,
                                           void **data,
                                           const struct ofp_header *oh);

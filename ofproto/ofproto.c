@@ -4238,6 +4238,13 @@ OVS_REQUIRES(ofproto_mutex)
                 hash_bytes(&vm->prog_id, 2, 0));
 }
 
+static void
+ubpf_vms_remove(struct ofproto *ofproto, struct ubpf_vm *vm)
+OVS_REQUIRES(ofproto_mutex)
+{
+    hmap_remove(&ofproto->ubpf_vms, &vm->hmap_node);
+}
+
 static bool
 ofproto_bpf_prog_exists(const struct ofproto *ofproto, const ovs_be16 prog_id)
 {
@@ -6202,6 +6209,38 @@ OVS_EXCLUDED(ofproto_mutex)
     ovs_mutex_lock(&ofproto_mutex);
     ubpf_vms_insert(ofproto, vm);
     ovs_mutex_unlock(&ofproto_mutex);
+
+    return error;
+}
+
+static enum ofperr
+handle_bpf_unload_prog(struct ofconn *ofconn, const struct ofp_header *oh)
+OVS_EXCLUDED(ofproto_mutex)
+{
+    struct ofproto *ofproto = ofconn_get_ofproto(ofconn);
+    enum ofperr error;
+    error = reject_slave_controller(ofconn);
+    if (error) {
+        return error;
+    }
+
+    struct ol_bpf_unload_prog msg;
+    error = ofputil_decode_bpf_unload_prog(&msg, oh);
+    if (error) {
+        return error;
+    }
+
+    struct ubpf_vm *vm = ofproto_get_ubpf_vm(ofproto, msg.prog);
+    if (!vm) {
+        VLOG_WARN_RL(&rl,
+                     "The referenced BPF program could not be found.");
+        return OFPERR_OFPBRC_EPERM;
+    }
+
+    ovs_mutex_lock(&ofproto_mutex);
+    ubpf_vms_remove(ofproto, vm);
+    ovs_mutex_unlock(&ofproto_mutex);
+    ubpf_destroy(vm);
 
     return error;
 }
@@ -8640,6 +8679,9 @@ handle_single_part_openflow(struct ofconn *ofconn, const struct ofp_header *oh,
 
     case OFPTYPE_BPF_LOAD_PROG:
         return handle_bpf_load_prog(ofconn, oh);
+
+    case OFPTYPE_BPF_UNLOAD_PROG:
+        return handle_bpf_unload_prog(ofconn, oh);
 
     case OFPTYPE_BPF_UPDATE_MAP:
         return handle_bpf_update_map(ofconn, oh);

@@ -81,6 +81,39 @@ struct ofpbuf *ofputil_encode_bpf_load_prog(enum ofp_version ofp_version,
     return request;
 }
 
+enum ofperr ofputil_decode_bpf_unload_prog(struct ol_bpf_unload_prog *msg,
+                                           const struct ofp_header *oh)
+{
+    enum ofperr error = 0;
+
+    struct ofpbuf b = ofpbuf_const_initializer(oh, ntohs(oh->length));
+    enum ofpraw raw = ofpraw_pull_assert(&b);
+    if (raw != OFPRAW_NXT_BPF_UNLOAD_PROG) {
+        return OFPERR_OFPBMC_BAD_TYPE;
+    }
+
+    struct ol_bpf_unload_prog *buffer;
+    buffer = ofpbuf_pull(&b, sizeof *buffer);
+
+    msg->prog = ntohs(buffer->prog);
+
+    return error;
+}
+
+struct ofpbuf *ofputil_encode_bpf_unload_prog(enum ofp_version ofp_version,
+                                              const ovs_be16 prog)
+{
+    struct ofpbuf *request;
+    struct ol_bpf_unload_prog *msg;
+
+    request = ofpraw_alloc(OFPRAW_NXT_BPF_UNLOAD_PROG, ofp_version, 0);
+    ofpbuf_put_zeros(request, sizeof *msg);
+    msg = request->msg;
+    msg->prog = htons(prog);
+
+    return request;
+}
+
 enum ofperr
 ofputil_decode_bpf_update_map(struct ol_bpf_update_map *msg,
                               void **data, const struct ofp_header *oh)
