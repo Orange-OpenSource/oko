@@ -63,6 +63,19 @@ ofputil_encode_dump_map_reply(struct ol_bpf_dump_map_request *msg,
                               void **data,
                               unsigned int *nb_elems);
 
+struct ofpbuf *
+ofputil_encode_bpf_delete_bpf_map(enum ofp_version ofp_version,
+                                  const ovs_be16 prog,
+                                  const ovs_be16 map,
+                                  void *key,
+                                  const size_t key_size,
+                                  const ovs_be32 nb_elems);
+
+enum ofperr
+ofputil_decode_bpf_delete_map(struct ol_bpf_delete_map *msg,
+                              const void **keys,
+                              const struct ofp_header *oh);
+
 #ifdef __cplusplus
 }
 #endif

@@ -6403,6 +6403,69 @@ handle_dump_map (struct ofconn *ofconn, const struct ofp_header *oh)
 }
 
 static enum ofperr
+handle_delete_map (struct ofconn *ofconn, const struct ofp_header *oh)
+{
+    struct ofproto *ofproto = ofconn_get_ofproto(ofconn);
+    enum ofperr error;
+    error = reject_slave_controller(ofconn);
+    if (error) {
+        return error;
+    }
+
+    struct ol_bpf_delete_map msg;
+    const void *keys;
+    error = ofputil_decode_bpf_delete_map(&msg, &keys, oh);
+
+    if (error) {
+        return error;
+    }
+
+    struct ubpf_vm *vm = ofproto_get_ubpf_vm(ofproto, msg.prog);
+    if (!vm) {
+        VLOG_WARN_RL(&rl,
+                     "The referenced program could not be found.");
+        return OFPERR_OFPBRC_EPERM;
+    }
+
+    if (msg.map >= vm->nb_maps) {
+        VLOG_WARN_RL(&rl,
+                     "The BPF map with provided identifier does not exist.");
+        return OFPERR_OFPBRC_EPERM;
+    }
+
+    if (msg.nb_elems <= 0) {
+        VLOG_WARN_RL(&rl,
+                     "Number of elements should be equal at least 1.");
+        return OFPERR_OFPBRC_EPERM;
+    }
+
+    const char *name = vm->ext_map_names[msg.map];
+    if (!name) {
+        VLOG_WARN_RL(&rl,
+                     "The map with the ID %"PRIu16" does not exist.", msg.map);
+        return OFPERR_OFPBRC_EPERM;
+    }
+
+    struct ubpf_map *map = ubpf_lookup_registered_map(vm, name);
+
+    if (!map) {
+        VLOG_WARN_RL(&rl,
+                     "The referenced map %s could not be found.", name);
+        return OFPERR_OFPBRC_EPERM;
+    }
+
+    for(int i = 0; i < msg.nb_elems; i++) {
+        if(!map->ops.map_delete(map, keys)) {
+            VLOG_WARN_RL(&rl,
+                         "The referenced map %"PRIu16" does not have key %"PRIu32".", msg.map, keys);
+        }
+        keys += msg.key_size;
+    }
+
+    return error;
+}
+
+static enum ofperr
 handle_role_request(struct ofconn *ofconn, const struct ofp_header *oh)
 {
     struct ofputil_role_request request;
@@ -8688,6 +8751,9 @@ handle_single_part_openflow(struct ofconn *ofconn, const struct ofp_header *oh,
 
     case OFPTYPE_BPF_DUMP_MAP_REQUEST:
         return handle_dump_map(ofconn, oh);
+
+    case OFPTYPE_BPF_DELETE_MAP:
+        return handle_delete_map(ofconn, oh);
 
     case OFPTYPE_GROUP_MOD:
         return handle_group_mod(ofconn, oh);

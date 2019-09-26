@@ -134,4 +134,26 @@ struct ol_bpf_dump_map {
 };
 OFP_ASSERT(sizeof(struct ol_bpf_dump_map) == 16);
 
+/*
+ * BPF_DELETE_MAP.
+ *
+ * BPF_DELETE_MAP allows to delete a map entries for the pre-defined map of the
+ * BPF program installed in Open vSwitch.
+ * The BPF program is referenced by program id and
+ * the map of the BPF program is referenced by map id.
+ *
+ * The application needs to provide at least one key of
+ * the correct size. The size of key is specified in the BPF program.
+ */
+struct ol_bpf_delete_map {
+    ovs_be16 prog;  /* BPF program ID. */
+    ovs_be16 map; /* Map ID. */
+    ovs_be32 key_size;
+    ovs_be32 nb_elems;
+    /* Followed by:
+     *   - Exactly nb_elems key of total nb_elems * key_size bytes. */
+    /* uint8_t entries[...]; */ /* Data containing the map keys. */
+};
+OFP_ASSERT(sizeof(struct ol_bpf_delete_map) == 12);
+
 #endif /* openflow/orange-ext.h */

@@ -5021,8 +5021,7 @@ ofctl_unload_bpf_prog(struct ovs_cmdl_context *ctx)
 }
 
 void
-get_map_key_value_size(int argc, char **args, ovs_be16 *key_size,
-                       ovs_be16 *value_size)
+get_map_key_size(int argc, char **args, ovs_be16 *key_size)
 {
 
     int k = 0;
@@ -5044,20 +5043,30 @@ get_map_key_value_size(int argc, char **args, ovs_be16 *key_size,
     }
 
     if (value_pos == 0) {
+        *key_size = (ovs_be16) argc - 1;
+    } else {
+        *key_size = (ovs_be16) value_pos - 1;
+    }
+}
+
+void
+get_map_value_size(int argc, char **args, ovs_be16 *key_size, ovs_be16 *value_size)
+{
+    int value_pos = *key_size + 1;
+
+    // the "key" need to be provided as a first element
+    if(strncmp(args[value_pos], "value", sizeof("value")) != 0) {
         VLOG_ERR("Value keyword has not been found."
                  "The format of command is invalid.");
         return;
     }
 
-    *key_size = (ovs_be16) value_pos - 1;
     *value_size = (ovs_be16) argc - value_pos - 1;
 }
 
 int
-map_parse_key_value(char **args, unsigned char *key,
-                    unsigned char *value, int key_size, int value_size)
+map_parse_key(char **args, unsigned char *key, int key_size)
 {
-    int value_pos = key_size + 1;
     unsigned int i = 0, base = 10;
     char *endptr;
 
@@ -5068,6 +5077,16 @@ map_parse_key_value(char **args, unsigned char *key,
             return -1;
         }
     }
+
+    return 0;
+}
+
+int
+map_parse_value(char **args, unsigned char *value, int key_size, int value_size)
+{
+    int value_pos = key_size + 1;
+    unsigned int i = 0, base = 10;
+    char *endptr;
 
     args = args + value_pos;
 
@@ -5103,7 +5122,8 @@ ofctl_update_bpf_map(struct ovs_cmdl_context *ctx)
     void *key, *value;
     ovs_be16 key_size, value_size;
 
-    get_map_key_value_size(nb_args, key_value_args, &key_size, &value_size);
+    get_map_key_size(nb_args, key_value_args, &key_size);
+    get_map_value_size(nb_args, key_value_args, &key_size, &value_size);
 
     if(key_size == 0 || value_size == 0) {
         ovs_fatal(0, "Invalid format. Key or value is not provided.");
@@ -5117,7 +5137,8 @@ ofctl_update_bpf_map(struct ovs_cmdl_context *ctx)
         return;
     }
 
-    if(map_parse_key_value(key_value_args, key, value, key_size, value_size)) {
+    if(map_parse_key(key_value_args, key, key_size) ||
+        map_parse_value(key_value_args, value, key_size, value_size)) {
         VLOG_ERR("Error while parsing key/value bytes.");
         return;
     }
@@ -5161,6 +5182,53 @@ ofctl_dump_bpf_map(struct ovs_cmdl_context *ctx)
     ofp_print(stdout, reply->data, reply->size, NULL, NULL, hex);
 
     ofpbuf_delete(reply);
+
+    vconn_close(vconn);
+}
+
+static void
+ofctl_delete_bpf_map(struct ovs_cmdl_context *ctx)
+{
+    struct ofpbuf *request;
+    struct ofpbuf *reply;
+    struct vconn *vconn;
+    enum ofputil_protocol protocol;
+    enum ofputil_protocol usable_protocols = OFPUTIL_P_OF13_UP | OFPUTIL_P_OF10_NXM;
+    enum ofp_version version;
+
+    const char *bridge = ctx->argv[1];
+    const ovs_be16 prog = atoi(ctx->argv[2]);
+    const ovs_be16 map = atoi(ctx->argv[3]);
+
+    char **key_args = ctx->argv + 4;
+    int nb_args = ctx->argc - 4;
+
+    void *key;
+    ovs_be16 key_size;
+
+    get_map_key_size(nb_args, key_args, &key_size);
+
+    if(key_size == 0) {
+        ovs_fatal(0, "Invalid format. Key is not provided.");
+    }
+
+    key = malloc(key_size);
+
+    if(!key) {
+        VLOG_ERR("Memory allocation for key failed.");
+        return;
+    }
+
+    if(map_parse_key(key_args, key, key_size)) {
+        VLOG_ERR("Error while parsing key bytes.");
+        return;
+    }
+
+    protocol = open_vconn_for_flow_mod(bridge, &vconn, usable_protocols);
+    version = ofputil_protocol_to_ofp_version(protocol);
+    request = ofputil_encode_bpf_delete_bpf_map(version, prog, map, key, key_size, 1);
+
+    transact_noreply(vconn, request);
 
     vconn_close(vconn);
 }
@@ -5307,6 +5375,7 @@ static const struct ovs_cmdl_command all_commands[] = {
     { "update-bpf-map", "switch prog_id map_id key [key] value [value]",
       7, INT_MAX, ofctl_update_bpf_map, OVS_RW },
     { "dump-bpf-map", "switch prog map [hex]", 3, 4, ofctl_dump_bpf_map },
+    { "delete-bpf-map", "switch prog map key [key]", 5, INT_MAX, ofctl_delete_bpf_map },
 
 
     { NULL, NULL, 0, 0, NULL, OVS_RO },

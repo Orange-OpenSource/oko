@@ -289,5 +289,73 @@ ofputil_encode_bpf_dump_map_reply(struct ol_bpf_dump_map_request *msg,
     return output_buffer;
 }
 
+struct ofpbuf *
+ofputil_encode_bpf_delete_bpf_map(enum ofp_version ofp_version,
+                                  const ovs_be16 prog,
+                                  const ovs_be16 map,
+                                  void *key,
+                                  const size_t key_size,
+                                  const ovs_be32 nb_elems)
+{
+    struct ofpbuf *request;
+    struct ol_bpf_delete_map *msg;
+
+    size_t length = (size_t) (nb_elems * key_size);
+
+    request = ofpraw_alloc(OFPRAW_NXT_BPF_DELETE_MAP, ofp_version, length);
+    ofpbuf_put_zeros(request, sizeof *msg);
+
+    msg = request->msg;
+    msg->prog = htons(prog);
+    msg->map = htons(map);
+    msg->key_size = htonl(key_size);
+    msg->nb_elems = htonl(nb_elems);
+
+    ofpbuf_put(request, key, key_size);
+
+    ofpmsg_update_length(request);
+
+    return request;
+}
+
+enum ofperr
+ofputil_decode_bpf_delete_map(struct ol_bpf_delete_map *msg,
+                              const void **keys,
+                              const struct ofp_header *oh)
+{
+    enum ofperr error = 0;
+    struct ofpbuf b = ofpbuf_const_initializer(oh, ntohs(oh->length));
+    enum ofpraw raw = ofpraw_pull_assert(&b);
+    if (raw != OFPRAW_NXT_BPF_DELETE_MAP) {
+        return OFPERR_OFPBMC_BAD_TYPE;
+    }
+
+    struct ol_bpf_delete_map *buffer = ofpbuf_pull(&b,
+                                                   sizeof(struct ol_bpf_delete_map));
+
+    msg->prog = ntohs(buffer->prog);
+    msg->map = ntohs(buffer->map);
+    msg->key_size = ntohl(buffer->key_size);
+    msg->nb_elems = ntohl(buffer->nb_elems);
+
+    if(!msg->prog) {
+        VLOG_WARN_RL(&rl,
+                     "The program identifier is not provided.");
+        return OFPERR_OFPBRC_EPERM;
+    }
+
+    size_t data_size = (size_t) (msg->nb_elems * msg->key_size);
+
+    *keys = ofpbuf_try_pull(&b, data_size);
+    if (!*keys) {
+        VLOG_WARN_RL(&rl, "Size of provided map keys is incorrect (%"PRIu32")",
+                data_size);
+
+        return OFPERR_OFPBMC_BAD_LEN;
+    }
+
+    return error;
+}
+
 
 
