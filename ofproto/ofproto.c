@@ -6277,14 +6277,7 @@ OVS_EXCLUDED(ofproto_mutex)
         return OFPERR_OFPBRC_EPERM;
     }
 
-    const char *name = vm->ext_map_names[msg.map_id];
-    if(!name) {
-        VLOG_WARN_RL(&rl,
-                     "The BPF map with the given ID does not exist.");
-        return OFPERR_OFPBRC_EPERM;
-    }
-
-    struct ubpf_map *map = ubpf_lookup_registered_map(vm, name);
+    struct ubpf_map *map = vm->ext_maps[msg.map_id];
 
     if(msg.key_size != map->key_size) {
         VLOG_WARN_RL(&rl,
@@ -6352,19 +6345,7 @@ handle_dump_map (struct ofconn *ofconn, const struct ofp_header *oh)
             return OFPERR_OFPBRC_EPERM;
         }
 
-        const char *name = vm->ext_map_names[maps[i]];
-        if (!name) {
-            VLOG_WARN_RL(&rl,
-                         "The map with the ID %"PRIu16" does not exist.", maps[i]);
-            return OFPERR_OFPBRC_EPERM;
-        }
-
-        ubpf_maps[i] = ubpf_lookup_registered_map(vm, name);
-        if (!ubpf_maps[i]) {
-            VLOG_WARN_RL(&rl,
-                         "The referenced map %s could not be found.", name);
-            return OFPERR_OFPBRC_EPERM;
-        }
+        ubpf_maps[i] = vm->ext_maps[maps[i]];
 
         if (!ubpf_maps[i]->ops.map_size) {
             VLOG_WARN_RL(&rl,
