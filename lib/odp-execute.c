@@ -722,15 +722,33 @@ odp_execute_check_pkt_len(void *dp, struct dp_packet *packet, bool steal,
 }
 
 static void
-odp_execute_bpf_prog(struct dp_packet *packet, const struct nlattr *action) {
-    const struct ovs_action_execute_bpf_prog *exec_bpf_prog =
-            nl_attr_get(action);
-    struct ubpf_vm *bpf_prog = exec_bpf_prog->vm;
-    if(bpf_prog) {
-        if(!execute_bpf_prog(packet, bpf_prog)) {
-            dp_packet_delete(packet);
+odp_execute_bpf_prog(struct dp_packet *packet, const struct nlattr *a, struct dp_packet_batch *batch) {
+    bool packet_pass[batch->count];
+    int nr_dropped = 0;
+    DP_PACKET_BATCH_FOR_EACH (i, packet, batch) {
+        const struct ovs_action_execute_bpf_prog *exec_bpf_prog =
+                nl_attr_get(a);
+        struct ubpf_vm *bpf_prog = exec_bpf_prog->vm;
+        if (bpf_prog) {
+            if (!execute_bpf_prog(packet, bpf_prog)) {
+                dp_packet_delete(packet);
+                packet_pass[i] = false;
+                nr_dropped++;
+            } else {
+                packet_pass[i] = true;
+            }
         }
     }
+    int step = 0;
+    for (int s = 0; s < batch->count - 1; s++) {
+        if (!packet_pass[s]) {
+            step++;
+        } else if (step > 0) {
+            batch->packets[s - step] = batch->packets[s];
+        }
+    }
+
+    batch->count -= nr_dropped;
 }
 
 static bool
@@ -1006,9 +1024,7 @@ odp_execute_actions(void *dp, struct dp_packet_batch *batch, bool steal,
             }
             break;
         case OVS_ACTION_ATTR_EXECUTE_PROG:
-            DP_PACKET_BATCH_FOR_EACH (i, packet, batch) {
-                odp_execute_bpf_prog(packet, a);
-            }
+            odp_execute_bpf_prog(packet, a, batch);
             break;
         case OVS_ACTION_ATTR_OUTPUT:
         case OVS_ACTION_ATTR_TUNNEL_PUSH:
