@@ -237,7 +237,7 @@ config-h-check:
 	@cd $(srcdir); \
 	if test -e .git && (git --version) >/dev/null 2>&1 && \
 	  git --no-pager grep -L '#include <config\.h>' `git ls-files | grep '\.c$$' | \
-	    grep -vE '^datapath|^lib/sflow|^third-party|^datapath-windows|^python'`; \
+	    grep -vE '^datapath|^lib/sflow|^third-party|^datapath-windows|^python|^examples'`; \
 	then \
 	  echo "See above for list of violations of the rule that"; \
 	  echo "every C source file must #include <config.h>."; \
