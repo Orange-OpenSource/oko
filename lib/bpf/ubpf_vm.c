@@ -25,12 +25,16 @@
 #include "ubpf_int.h"
 #include <config.h>
 #include "openvswitch/list.h"
+#include "openvswitch/vlog.h"
 #include "util.h"
+
 
 #define MAX_EXT_FUNCS 64
 #define MAX_EXT_MAPS 64
 #define NB_REGS 11
-// #define DEBUG(...) printf(__VA_ARGS__)
+
+VLOG_DEFINE_THIS_MODULE(verifier);
+// #define DEBUG(...) VLOG_INFO(__VA_ARGS__)
 #define DEBUG(...)
 
 #ifndef MIN
@@ -45,8 +49,14 @@
 struct bpf_reg_state {
     enum ubpf_reg_type type;
     struct ubpf_map *map;
-    int64_t min_val;
-    uint64_t max_val;
+    struct {
+        int64_t min;
+        int64_t max;
+    } s;
+    struct {
+        uint64_t min;
+        uint64_t max;
+    } u;
 };
 
 struct bpf_state {
@@ -101,16 +111,20 @@ static bool bounds_check(void *addr, int size, const char *type,
 static inline void
 mark_bpf_reg_as_unknown(struct bpf_reg_state *reg) {
     reg->type = UNKNOWN;
-    reg->min_val = REGISTER_MIN_RANGE;
-    reg->max_val = REGISTER_MAX_RANGE;
+    reg->u.max = UINT64_MAX;
+    reg->u.min = 0;
+    reg->s.max = INT64_MAX;
+    reg->s.min = INT64_MIN;
     reg->map = NULL;
 }
 
 static inline void
 mark_bpf_reg_as_imm(struct bpf_reg_state *reg, int32_t val) {
     reg->type = IMM;
-    reg->min_val = val;
-    reg->max_val = val;
+    reg->s.min = val;
+    reg->s.max = val;
+    reg->u.min = val;
+    reg->u.max = val;
     reg->map = NULL;
 }
 
@@ -700,14 +714,14 @@ validate_call(const struct ubpf_vm *vm, struct bpf_state *state,
             if (expected_size == SIZE_PTR_MAX) {
                 // Next argument should be constant imm, < MAX_SIZE_ARG:
                 next_reg = &state->regs[i + 1];
-                if (next_reg->type == IMM && next_reg->max_val > MAX_SIZE_ARG
-                    && next_reg->min_val == next_reg->max_val) {
+                if (next_reg->type == IMM && next_reg->u.max > MAX_SIZE_ARG
+                    && next_reg->u.min == next_reg->u.max) {
                     *errmsg = ubpf_error("incorrect argument for func %d arg "
                                          "%d at PC %d", func, i + 1,
                                          state->instno);
                     return false;
                 }
-                size = next_reg->min_val;
+                size = next_reg->u.min;
             } else {
                 map = state->regs[1].map;
                 if (!map) {
@@ -719,8 +733,8 @@ validate_call(const struct ubpf_vm *vm, struct bpf_state *state,
                             map->key_size : map->value_size;
             }
 
-            min_val = reg->min_val;
-            max_val = reg->max_val;
+            min_val = reg->s.min;
+            max_val = reg->u.max;
             switch (reg->type) {
                 case PKT_PTR:
                     // FIXME: disable verifier to pass adjust_head()
@@ -732,6 +746,11 @@ validate_call(const struct ubpf_vm *vm, struct bpf_state *state,
                     break;
 
                 case STACK_PTR:
+                    if (min_val != max_val) {
+                        *errmsg = ubpf_error("variable access to stack at PC %d"
+                                             ", arg %d", state->instno, i);
+                        return false;
+                    }
                     if (min_val < -STACK_SIZE || min_val + size > 0) {
                         *errmsg = ubpf_error("invalid access to stack at PC %d"
                                              ", arg %d", state->instno, i);
@@ -767,7 +786,12 @@ validate_call(const struct ubpf_vm *vm, struct bpf_state *state,
                     }
                     break;
 
-                default:
+                case UNINIT:
+                case UNKNOWN:
+                case NULL_VALUE:
+                case IMM:
+                case MAP_PTR:
+                case PKT_SIZE:
                     *errmsg = ubpf_error("invalid memory access at PC %d",
                                          state->instno);
                     // FIXME: disable verifier to pass adjust_head()
@@ -789,8 +813,10 @@ validate_call(const struct ubpf_vm *vm, struct bpf_state *state,
         state->regs[0].type = proto.ret;
         state->regs[0].map = state->regs[1].map;
         // Offsets from the start of map value:
-        state->regs[0].min_val = 0;
-        state->regs[0].max_val = 0;
+        state->regs[0].u.min = 0;
+        state->regs[0].u.max = 0;
+        state->regs[0].s.min = 0;
+        state->regs[0].s.max = 0;
         DEBUG("\tAssigned map %p to R0\n", state->regs[1].map);
     } else {
         mark_bpf_reg_as_unknown(&state->regs[0]);
@@ -801,14 +827,14 @@ validate_call(const struct ubpf_vm *vm, struct bpf_state *state,
 }
 
 static void
-handle_min_max_overflows(struct bpf_reg_state *reg) {
-    if (reg->min_val < REGISTER_MIN_RANGE
-        || reg->min_val > REGISTER_MAX_RANGE) {
-        reg->min_val = REGISTER_MIN_RANGE;
+handle_min_max_overflows(struct bpf_reg_state *reg, uint64_t mask) {
+    if (((reg->u.min & mask) != reg->u.min) || ((reg->u.max & mask) != reg->u.max)) {
+        reg->u.max = MAX(mask, reg->u.max);
+        reg->u.min = 0;
     }
-    if (reg->max_val > REGISTER_MAX_RANGE) {
-        reg->max_val = REGISTER_MAX_RANGE;
-    }
+
+    reg->s.max = MIN(mask >> 1, reg->s.max);
+    reg->s.min = MAX((int64_t)((mask >> 1) ^ UINT64_MAX), reg->s.min);
 }
 
 static void
@@ -819,43 +845,45 @@ update_min_max_jump_imm(struct bpf_reg_state *true_reg,
                         uint64_t val) {
     switch (opcode) {
         case EBPF_JMP_JEQ:
-            true_reg->min_val = val;
-            true_reg->max_val = val;
+            true_reg->s.min = val;
+            true_reg->s.max = val;
+            true_reg->u.min = val;
+            true_reg->u.max = val;
             break;
         case EBPF_JMP_JGT:
             // reg > val if true, reg <= val if false.
-            true_reg->min_val = val + 1;
-            false_reg->max_val = val;
+            true_reg->u.min = val + 1;
+            false_reg->u.max = val;
             break;
         case EBPF_JMP_JGE:
             // reg >= val if true, reg < val if false.
-            true_reg->min_val = val;
-            false_reg->max_val = val - 1;
+            true_reg->u.min = val;
+            false_reg->u.max = val - 1;
             break;
         case EBPF_JMP_JNE:
-            false_reg->min_val = val;
-            false_reg->max_val = val;
+            false_reg->s.min = val;
+            false_reg->s.max = val;
+            false_reg->u.min = val;
+            false_reg->u.max = val;
             break;
         case EBPF_JMP_JSGT:
             // reg > val if true, reg <= val if false.
-            true_reg->min_val = val + 1;
-            false_reg->max_val = val;
+            true_reg->s.min = val + 1;
+            false_reg->s.max = val;
             break;
         case EBPF_JMP_JSGE:
             // reg >= val if true, reg < val if false.
-            true_reg->min_val = val;
-            false_reg->max_val = val - 1;
+            true_reg->s.min = val;
+            false_reg->s.max = val - 1;
             break;
     }
-    handle_min_max_overflows(true_reg);
-    handle_min_max_overflows(false_reg);
 
     // Update pkt_range to remember it independantly of registers' lifes.
-    if (true_reg->type == PKT_SIZE && true_reg->min_val > *true_pkt_range) {
-        *true_pkt_range = true_reg->min_val;
+    if (true_reg->type == PKT_SIZE && true_reg->u.min > *true_pkt_range) {
+        *true_pkt_range = true_reg->u.min;
     }
-    if (false_reg->type == PKT_SIZE && false_reg->min_val > *false_pkt_range) {
-        *false_pkt_range = false_reg->min_val;
+    if (false_reg->type == PKT_SIZE && false_reg->u.min > *false_pkt_range) {
+        *false_pkt_range = false_reg->u.min;
     }
 }
 
@@ -867,43 +895,45 @@ update_min_max_jump_imm_inv(struct bpf_reg_state *true_reg,
                             uint64_t val) {
     switch (opcode) {
         case EBPF_JMP_JEQ:
-            true_reg->min_val = val;
-            true_reg->max_val = val;
+            true_reg->s.min = val;
+            true_reg->s.max = val;
+            true_reg->u.min = val;
+            true_reg->u.max = val;
             break;
         case EBPF_JMP_JGT:
             // val > reg if true, val <= reg if false.
-            true_reg->max_val = val - 1;
-            false_reg->min_val = val;
+            true_reg->u.max = val - 1;
+            false_reg->u.min = val;
             break;
         case EBPF_JMP_JGE:
             // val >= reg if true, val < reg if false.
-            true_reg->max_val = val;
-            false_reg->min_val = val + 1;
+            true_reg->u.max = val;
+            false_reg->u.min = val + 1;
             break;
         case EBPF_JMP_JNE:
-            false_reg->min_val = val;
-            false_reg->max_val = val;
+            false_reg->s.min = val;
+            false_reg->s.max = val;
+            false_reg->u.min = val;
+            false_reg->u.max = val;
             break;
         case EBPF_JMP_JSGT:
             // val > reg if true, val <= reg if false.
-            true_reg->max_val = val - 1;
-            false_reg->min_val = val;
+            true_reg->s.max = val - 1;
+            false_reg->s.min = val;
             break;
         case EBPF_JMP_JSGE:
             // val >= reg if true, val < reg if false.
-            true_reg->max_val = val;
-            false_reg->min_val = val + 1;
+            true_reg->s.max = val;
+            false_reg->s.min = val + 1;
             break;
     }
-    handle_min_max_overflows(true_reg);
-    handle_min_max_overflows(false_reg);
 
     // Update pkt_range to remember it independantly of registers' lifes.
-    if (true_reg->type == PKT_SIZE && true_reg->min_val > *true_pkt_range) {
-        *true_pkt_range = true_reg->min_val;
+    if (true_reg->type == PKT_SIZE && true_reg->u.min > *true_pkt_range) {
+        *true_pkt_range = true_reg->u.min;
     }
-    if (false_reg->type == PKT_SIZE && false_reg->min_val > *false_pkt_range) {
-        *false_pkt_range = false_reg->min_val;
+    if (false_reg->type == PKT_SIZE && false_reg->u.min > *false_pkt_range) {
+        *false_pkt_range = false_reg->u.min;
     }
 }
 
@@ -915,79 +945,102 @@ update_min_max_jump_reg(struct bpf_reg_state *true_reg1,
                         struct bpf_reg_state *false_reg2,
                         uint64_t *false_pkt_range, uint8_t opcode) {
     // reg1 \in [a;b], reg2 \in [c;d]
-    int64_t a = true_reg1->min_val, c = true_reg2->min_val;
-    uint64_t b = true_reg1->max_val, d = true_reg2->max_val;
-    bool intersect = (c <= a && a <= d) || (c <= b && b <= d) || (a <= c && c <= b);
+    int64_t sa, sb, sc, sd;
+    uint64_t ua, ub, uc, ud;
+    bool signed_intersect, unsigned_intersect;
 
     switch (opcode) {
         case EBPF_JMP_JEQ:
+            sa = true_reg1->s.min, sc = true_reg2->s.min;
+            sb = true_reg1->s.max, sd = true_reg2->s.max;
+            ua = true_reg1->u.min, uc = true_reg2->u.min;
+            ub = true_reg1->u.max, ud = true_reg2->u.max;
+            signed_intersect = (sc <= sa && sa <= sd) ||
+                               (sc <= sb && sb <= sd) ||
+                               (sa <= sc && sc <= sb);
+            unsigned_intersect = (uc <= ua && ua <= ud) ||
+                                 (uc <= ub && ub <= ud) ||
+                                 (ua <= uc && uc <= ub);
             // Check that they intersect.
-            if (!intersect) {
+            if (!signed_intersect || !unsigned_intersect) {
                 return -1;
             }
             // If egal, their range is the intersection.
-            true_reg1->min_val = MAX(a, c);
-            true_reg1->max_val = MIN(b, d);
-            true_reg2->min_val = MAX(a, c);
-            true_reg2->max_val = MIN(b, d);
+            true_reg1->s.min = MAX(sa, sc);
+            true_reg1->s.max = MIN(sb, sd);
+            true_reg2->s = true_reg1->s;
             break;
+
         case EBPF_JMP_JGT:
-            if (!intersect) {
-                if (c > b) {
-                    return -1;
-                }
-                if (a > d) {
-                    return 1;
-                }
-                return 0;
-            }
             // reg1 > reg2 is true.
-            true_reg1->min_val = MAX(a, c + 1);
-            true_reg2->max_val = MIN(b - 1, d);
+            true_reg1->u.min = MAX(true_reg1->u.min, true_reg2->u.min + 1);
+            true_reg2->u.max = MIN(true_reg1->u.max - 1, true_reg2->u.max);
             // reg1 <= reg2 is true.
-            false_reg1->max_val = MIN(b, d);
-            false_reg2->min_val = MAX(a, c);
+            false_reg1->u.max = MIN(false_reg1->u.max, false_reg2->u.max);
+            false_reg2->u.min = MAX(false_reg1->u.min, false_reg2->u.min);
             break;
+
         case EBPF_JMP_JGE:
-            if (!intersect) {
-                if (c > b) {
-                    return -1;
-                }
-                if (a > d) {
-                    return 1;
-                }
-                return 0;
-            }
             // reg1 >= reg2 is true.
-            true_reg1->min_val = MAX(a, c);
-            true_reg2->max_val = MIN(b, d);
+            true_reg1->u.min = MAX(true_reg1->u.min, true_reg2->u.min);
+            true_reg2->u.max = MIN(true_reg1->u.max, true_reg2->u.max);
             // reg1 <= reg2 is true.
-            false_reg1->max_val = MIN(b, d - 1);
-            false_reg2->min_val = MAX(a + 1, c);
+            false_reg1->u.max = MIN(false_reg1->u.max, false_reg2->u.max - 1);
+            false_reg2->u.min = MAX(false_reg1->u.min + 1, false_reg2->u.min);
             break;
+
         case EBPF_JMP_JNE:
+            sa = false_reg1->s.min, sc = false_reg2->s.min;
+            sb = false_reg1->s.max, sd = false_reg2->s.max;
+            ua = false_reg1->u.min, uc = false_reg2->u.min;
+            ub = false_reg1->u.max, ud = false_reg2->u.max;
+            signed_intersect = (sc <= sa && sa <= sd) ||
+                               (sc <= sb && sb <= sd) ||
+                               (sa <= sc && sc <= sb);
+            unsigned_intersect = (uc <= ua && ua <= ud) ||
+                                 (uc <= ub && ub <= ud) ||
+                                 (ua <= uc && uc <= ub);
+            // Check that they intersect.
+            if (!signed_intersect || !unsigned_intersect) {
+                return -1;
+            }
+            // If egal, their range is the intersection.
+            false_reg1->s.min = MAX(sa, sc);
+            false_reg1->s.max = MIN(sb, sd);
+            false_reg2->s = false_reg1->s;
+            break;
+
         case EBPF_JMP_JSGT:
+            // reg1 > reg2 is true.
+            true_reg1->s.min = MAX(true_reg1->s.min, true_reg2->s.min + 1);
+            true_reg2->s.max = MIN(true_reg1->s.max - 1, true_reg2->s.max);
+            // reg1 <= reg2 is true.
+            false_reg1->s.max = MIN(false_reg1->s.max, false_reg2->s.max);
+            false_reg2->s.min = MAX(false_reg1->s.min, false_reg2->s.min);
+            break;
+
         case EBPF_JMP_JSGE:
-            // We know nothing.
+            // reg1 >= reg2 is true.
+            true_reg1->s.min = MAX(true_reg1->s.min, true_reg2->s.min);
+            true_reg2->s.max = MIN(true_reg1->s.max, true_reg2->s.max);
+            // reg1 <= reg2 is true.
+            false_reg1->s.max = MIN(false_reg1->s.max, false_reg2->s.max - 1);
+            false_reg2->s.min = MAX(false_reg1->s.min + 1, false_reg2->s.min);
             return 0;
     }
-    handle_min_max_overflows(true_reg1);
-    handle_min_max_overflows(true_reg2);
-    handle_min_max_overflows(false_reg1);
-    handle_min_max_overflows(false_reg2);
 
     // Update pkt_range to remember it independantly of registers' lifes.
-    if (true_reg1->type == PKT_SIZE && true_reg1->min_val > *true_pkt_range) {
-        *true_pkt_range = true_reg1->min_val;
+    if (true_reg1->type == PKT_SIZE && true_reg1->u.min > *true_pkt_range) {
+        *true_pkt_range = true_reg1->u.min;
     }
-    if (true_reg2->type == PKT_SIZE && true_reg2->min_val > *true_pkt_range) {
-        *true_pkt_range = true_reg2->min_val;
+    if (true_reg2->type == PKT_SIZE && true_reg2->u.min > *true_pkt_range) {
+        *true_pkt_range = true_reg2->u.min;
     }
-    if (false_reg1->type == PKT_SIZE && false_reg1->min_val > *false_pkt_range) {
-        *false_pkt_range = false_reg1->min_val;
+    if (false_reg1->type == PKT_SIZE && false_reg1->u.min > *false_pkt_range) {
+        *false_pkt_range = false_reg1->u.min;
     }
-    if (false_reg2->type == PKT_SIZE && false_reg2->min_val > *false_pkt_range) {
-        *false_pkt_range = false_reg2->min_val;
+    if (false_reg2->type == PKT_SIZE && false_reg2->u.min > *false_pkt_range) {
+        *false_pkt_range = false_reg2->u.min;
     }
 
     return 0;
@@ -1018,21 +1071,21 @@ validate_jump(struct bpf_state *s, struct bpf_state *curr_state,
 
     if (EBPF_SRC(inst->opcode) == EBPF_SRC_REG) {
         if (dst_reg->type == IMM) {
-            // If type == IMM, then min_val == max_val.
+            // If type == IMM, then min == max.
             update_min_max_jump_imm_inv(&other_branch->regs[inst->src],
                                         &other_branch->pkt_range,
                                         src_reg,
                                         &curr_state->pkt_range,
                                         EBPF_OP(inst->opcode),
-                                        dst_reg->min_val);
-            DEBUG("\tR%d (t=%d) may have updated range [%ld;%lu)\n", inst->src, src_reg->type, src_reg->min_val, src_reg->max_val);
+                                        dst_reg->u.min);
+            DEBUG("\tR%d (t=%d) may have updated range [%ld;%lu)\n", inst->src, src_reg->type, src_reg->s.min, src_reg->u.max);
         } else if (src_reg->type == IMM) {
-            // If type == IMM, then min_val == max_val.
+            // If type == IMM, then min == max.
             update_min_max_jump_imm(&other_branch->regs[inst->dst],
                                     &other_branch->pkt_range, dst_reg,
                                     &curr_state->pkt_range,
-                                    EBPF_OP(inst->opcode), src_reg->min_val);
-            DEBUG("\tR%d (t=%d) may have updated range [%ld;%lu)\n", inst->dst, dst_reg->type, dst_reg->min_val, dst_reg->max_val);
+                                    EBPF_OP(inst->opcode), src_reg->u.min);
+            DEBUG("\tR%d (t=%d) may have updated range [%ld;%lu)\n", inst->dst, dst_reg->type, dst_reg->s.min, dst_reg->u.max);
         } else if ((dst_reg->type == UNKNOWN || dst_reg->type == PKT_SIZE) &&
                    (src_reg->type == UNKNOWN || src_reg->type == PKT_SIZE)) {
             update_min_max_jump_reg(&other_branch->regs[inst->dst],
@@ -1040,15 +1093,15 @@ validate_jump(struct bpf_state *s, struct bpf_state *curr_state,
                                     &other_branch->pkt_range,
                                     dst_reg, src_reg, &curr_state->pkt_range,
                                     EBPF_OP(inst->opcode));
-            DEBUG("\tR%d (t=%d) may have updated range [%ld;%lu)\n", inst->dst, dst_reg->type, dst_reg->min_val, dst_reg->max_val);
-            DEBUG("\tR%d (t=%d) may have updated range [%ld;%lu)\n", inst->src, src_reg->type, src_reg->min_val, src_reg->max_val);
+            DEBUG("\tR%d (t=%d) may have updated range [%ld;%lu)\n", inst->dst, dst_reg->type, dst_reg->s.min, dst_reg->u.max);
+            DEBUG("\tR%d (t=%d) may have updated range [%ld;%lu)\n", inst->src, src_reg->type, src_reg->s.min, src_reg->u.max);
         }
     } else {
         update_min_max_jump_imm(&other_branch->regs[inst->dst],
                                 &other_branch->pkt_range, dst_reg,
                                 &curr_state->pkt_range,
                                 EBPF_OP(inst->opcode), inst->imm);
-        DEBUG("\tR%d (t=%d) may have updated range [%ld;%lu)\n", inst->dst, dst_reg->type, dst_reg->min_val, dst_reg->max_val);
+        DEBUG("\tR%d (t=%d) may have updated range [%ld;%lu)\n", inst->dst, dst_reg->type, dst_reg->s.min, dst_reg->u.max);
     }
 
     if (dst_reg->type == (MAP_VALUE_PTR | NULL_VALUE)
@@ -1064,71 +1117,135 @@ validate_jump(struct bpf_state *s, struct bpf_state *curr_state,
     return true;
 }
 
+static inline uint64_t
+compute_bitwise_and_bound(uint64_t a, uint64_t b, unsigned int opsize) {
+    a = __builtin_clzll(a);
+    b = __builtin_clzll(b);
+    return ((uint64_t) -1) >> (64 - (opsize - MAX(a, b)));
+}
+
 static void
 update_min_max_alu_op(struct bpf_reg_state regs[], struct ebpf_inst *inst) {
-    uint64_t max_val;
-    int64_t min_val;
+    struct bpf_reg_state *dst_reg = &regs[inst->dst];
+    struct bpf_reg_state src_reg;
+    uint64_t mask = (EBPF_CLASS(inst->opcode) == EBPF_CLS_ALU64)? 0xffffffffffffffff : 0xffffffff;
+    unsigned int opsize = (EBPF_CLASS(inst->opcode) == EBPF_CLS_ALU64)? 64 : 32;
 
     if (EBPF_SRC(inst->opcode) == EBPF_SRC_REG) {
-        handle_min_max_overflows(&regs[inst->src]);
-        max_val = regs[inst->src].max_val;
-        min_val = regs[inst->src].min_val;
-
-        // min & max represent offsets for pointer registers:
-        if (is_pointer_type(regs[inst->src].type)) {
-            max_val = REGISTER_MAX_RANGE;
-            min_val = REGISTER_MIN_RANGE;
-        }
+        src_reg = regs[inst->src];
+        handle_min_max_overflows(&src_reg, mask);
     } else {
-        max_val = inst->imm;
-        min_val = inst->imm;
+        mark_bpf_reg_as_imm(&src_reg, inst->imm);
     }
+    handle_min_max_overflows(dst_reg, mask);
 
-    struct bpf_reg_state *dst_reg = &regs[inst->dst];
-    if (max_val >= REGISTER_MAX_RANGE) {
-        dst_reg->max_val = REGISTER_MAX_RANGE;
-    }
-    if (min_val <= REGISTER_MIN_RANGE) {
-        dst_reg->min_val = REGISTER_MIN_RANGE;
-    }
-
+    struct bpf_reg_state nr;
     switch(EBPF_OP(inst->opcode)) {
         case EBPF_ALU_ADD:
-            if (dst_reg->min_val != REGISTER_MIN_RANGE) {
-                dst_reg->min_val += min_val;
+            nr.u.min = (dst_reg->u.min + src_reg.u.min) & mask;
+            nr.u.max = (dst_reg->u.max + src_reg.u.max) & mask;
+            nr.s.min = (dst_reg->s.min + src_reg.s.min) & mask;
+            nr.s.max = (dst_reg->s.max + src_reg.s.max) & mask;
+
+            // Check for overflows:
+            if ((nr.u.min < dst_reg->u.min || nr.u.max < dst_reg->u.max) &&
+                (dst_reg->u.min != dst_reg->u.max || src_reg.u.min != src_reg.u.max)) {
+                nr.u.max = MAX(mask, nr.u.max);
+                nr.u.min = 0;
             }
-            if (dst_reg->max_val != REGISTER_MAX_RANGE) {
-                dst_reg->max_val += max_val;
+            if ((((src_reg.s.min < 0 && nr.s.min > dst_reg->s.min) || nr.s.min < dst_reg->s.min) ||
+                 ((src_reg.s.max < 0 && nr.s.max > dst_reg->s.max) || nr.s.max < dst_reg->s.max)) &&
+                (dst_reg->s.min != dst_reg->s.max || src_reg.s.min != src_reg.s.max)) {
+                nr.s.max = mask >> 1;
+                nr.s.min = (mask >> 1) ^ UINT64_MAX;
             }
+
+            dst_reg->u = nr.u;
+            dst_reg->s = nr.s;
             break;
+
         case EBPF_ALU_SUB:
-            if (dst_reg->min_val != REGISTER_MIN_RANGE) {
-                dst_reg->min_val -= min_val;
+            nr.u.min = (dst_reg->u.min - src_reg.u.min) & mask;
+            nr.u.max = (dst_reg->u.max - src_reg.u.max) & mask;
+            nr.s.min = (dst_reg->s.min - src_reg.s.min) & mask;
+            nr.s.max = (dst_reg->s.max - src_reg.s.max) & mask;
+
+            // Check for overflows:
+            if ((nr.u.min > dst_reg->u.min || nr.u.max > dst_reg->u.max) &&
+                (dst_reg->u.min != dst_reg->u.max || src_reg.u.min != src_reg.u.max)) {
+                nr.u.max = MAX(mask, nr.u.max);
+                nr.u.min = 0;
             }
-            if (dst_reg->max_val != REGISTER_MAX_RANGE) {
-                dst_reg->max_val -= max_val;
+            if ((((src_reg.s.min < 0 && nr.s.min < dst_reg->s.min) || nr.s.min > dst_reg->s.min) ||
+                 ((src_reg.s.max < 0 && nr.s.max < dst_reg->s.max) || nr.s.max > dst_reg->s.max)) &&
+                (dst_reg->s.min != dst_reg->s.max || src_reg.s.min != src_reg.s.max)) {
+                nr.s.max = mask >> 1;
+                nr.s.min = (mask >> 1) ^ UINT64_MAX;
             }
+
+            dst_reg->u = nr.u;
+            dst_reg->s = nr.s;
             break;
+
         case EBPF_ALU_MUL:
-            if (dst_reg->min_val != REGISTER_MIN_RANGE) {
-                dst_reg->min_val *= min_val;
+
+            if (dst_reg->u.min == dst_reg->u.max && src_reg.u.min == src_reg.u.max) {
+                dst_reg->u.min = (dst_reg->u.min * src_reg.u.min) & mask;
+                dst_reg->u.max = (dst_reg->u.max * src_reg.u.max) & mask;
+            } else if (dst_reg->u.max <= mask >> opsize / 2 && src_reg.u.max <= mask >> opsize) {
+                // We've checked for overflows already (same boundaries as DPDK).
+                dst_reg->u.max *= src_reg.u.max;
+                dst_reg->u.min *= dst_reg->u.min;
+            } else {
+                dst_reg->u.max = MAX(mask, nr.u.max);
+                dst_reg->u.min = 0;
             }
-            if (dst_reg->max_val != REGISTER_MAX_RANGE) {
-                dst_reg->max_val *= max_val;
+
+            if (dst_reg->s.min == dst_reg->s.max && src_reg.s.min == src_reg.s.max) {
+                dst_reg->s.min = (dst_reg->s.min * src_reg.s.min) & mask;
+                dst_reg->s.max = (dst_reg->s.max * src_reg.s.max) & mask;
+            } else if (dst_reg->s.min >= 0 && src_reg.s.min >= 0) {
+                // Both are positives so no overflows.
+                dst_reg->s.max *= src_reg.s.max;
+                dst_reg->s.min *= dst_reg->s.min;
+            } else {
+                dst_reg->s.max = mask >> 1;
+                dst_reg->s.min = (mask >> 1) ^ UINT64_MAX;
             }
             break;
+
         case EBPF_ALU_AND:
-            dst_reg->max_val = max_val;
-            dst_reg->min_val = (min_val < 0)? REGISTER_MIN_RANGE : 0;
+            if (dst_reg->u.min == dst_reg->u.max && src_reg.u.min == src_reg.u.max) {
+                dst_reg->u.min &= src_reg.u.min;
+                dst_reg->u.max &= src_reg.u.max;
+            } else {
+                dst_reg->u.max = compute_bitwise_and_bound(dst_reg->u.max,
+                                                           src_reg.u.max, opsize);
+                dst_reg->u.min &= src_reg.u.min;
+            }
+
+            if (dst_reg->s.min == dst_reg->s.max && src_reg.s.min == src_reg.s.max) {
+                dst_reg->s.min &= src_reg.s.min;
+                dst_reg->s.max &= src_reg.s.max;
+            } else if (dst_reg->s.min >= 0 || src_reg.s.min >= 0) {
+                dst_reg->s.max = compute_bitwise_and_bound(dst_reg->s.max & (mask >> 1),
+                                                           src_reg.s.max & (mask >> 1),
+                                                           opsize);
+                dst_reg->s.min &= src_reg.s.min;
+            } else {
+                dst_reg->s.max = mask >> 1;
+                dst_reg->s.min = (mask >> 1) ^ UINT64_MAX;
+            }
             break;
 
         default:
-            dst_reg->min_val = REGISTER_MIN_RANGE;
-            dst_reg->max_val = REGISTER_MAX_RANGE;
+            dst_reg->u.max = MAX(mask, nr.u.max);
+            dst_reg->u.min = 0;
+            dst_reg->s.max = mask >> 1;
+            dst_reg->s.min = (mask >> 1) ^ UINT64_MAX;
     }
 
-    handle_min_max_overflows(dst_reg);
-    DEBUG("\tR%d (t=%d) has updated range [%ld;%lu)\n", inst->dst, dst_reg->type, dst_reg->min_val, dst_reg->max_val);
+    DEBUG("\tR%d (t=%d) has updated range [%ld;%lu)\n", inst->dst, dst_reg->type, dst_reg->s.min, dst_reg->u.max);
 }
 
 static bool
@@ -1153,7 +1270,7 @@ validate_alu_op(struct bpf_state *state, struct ebpf_inst *inst,
             } else {
                 mark_bpf_reg_as_imm(dst_reg, inst->imm);
             }
-            DEBUG("\tR%d now has type %u, range [%ld;%lu)\n", inst->dst, dst_reg->type, dst_reg->min_val, dst_reg->max_val);
+            DEBUG("\tR%d now has type %u, range [%ld;%lu)\n", inst->dst, dst_reg->type, dst_reg->s.min, dst_reg->u.max);
             break;
 
         default:
@@ -1218,8 +1335,8 @@ validate_mem_access(struct bpf_state *state, uint8_t regno,
 //                return false;
 //            }
 
-            min_val = state->regs[regno].min_val;
-            max_val = state->regs[regno].max_val;
+            min_val = state->regs[regno].s.min;
+            max_val = state->regs[regno].u.max;
 
             DEBUG("\t%d + %lu + %d > %lu\n", inst->offset, max_val, size, state->pkt_range);
 //            if (inst->offset + min_val < 0
@@ -1261,8 +1378,8 @@ validate_mem_access(struct bpf_state *state, uint8_t regno,
             break;
 
         case MAP_VALUE_PTR:
-            min_val = state->regs[regno].min_val;
-            max_val = state->regs[regno].max_val;
+            min_val = state->regs[regno].s.min;
+            max_val = state->regs[regno].u.max;
             if (max_val == REGISTER_MAX_RANGE) {
                 *errmsg = ubpf_error("unbounded access to map value at PC %d",
                                      state->instno);
@@ -1274,15 +1391,20 @@ validate_mem_access(struct bpf_state *state, uint8_t regno,
                                      "PC %d", regno, state->instno);
                 return false;
             }
-            if (inst->offset + min_val < 0
-                || inst->offset + size + max_val > map->value_size) {
+            if (inst->offset + min_val < 0 ||
+                inst->offset + size + max_val > map->value_size) {
                 *errmsg = ubpf_error("invalid access to map value at PC %d",
                                      state->instno);
                 return false;
             }
             break;
 
-        default:
+        case UNINIT:
+        case UNKNOWN:
+        case NULL_VALUE:
+        case IMM:
+        case MAP_PTR:
+        case PKT_SIZE:
             *errmsg = ubpf_error("invalid memory access at PC %d", state->instno);
             // FIXME: disable verifier to pass adjust_head()
             return true;
@@ -1298,8 +1420,10 @@ validate_accesses(const struct ubpf_vm *vm,
     ovs_list_init(&s->node);
     s->regs[1].type = PKT_PTR;
     s->regs[2].type = PKT_SIZE;
-    s->regs[2].min_val = REGISTER_MIN_RANGE;
-    s->regs[2].max_val = REGISTER_MAX_RANGE;
+    s->regs[2].u.max = UINT64_MAX;
+    s->regs[2].u.min = 0;
+    s->regs[2].s.max = INT64_MAX;
+    s->regs[2].s.min = INT64_MIN;
     s->regs[10].type = STACK_PTR;
     struct bpf_state *curr_state = s;
     while (true) {
@@ -1355,7 +1479,7 @@ validate_accesses(const struct ubpf_vm *vm,
                     // Register spilling
                     int stack_slot = STACK_SIZE + inst.offset;
                     curr_state->stack[stack_slot] = curr_state->regs[inst.src];
-                    DEBUG("\tSpilled R%d to stack offset %d\n", inst.dst, stack_slot);
+                    DEBUG("\tSpilled R%d to stack offset %d\n", inst.src, stack_slot);
                 }
                 break;
 
@@ -1372,8 +1496,10 @@ validate_accesses(const struct ubpf_vm *vm,
                     map = (void *)((imm2 << 32) | (uint32_t)inst.imm);
                     curr_state->regs[inst.dst].map = map;
                     curr_state->regs[inst.dst].type = MAP_PTR;
-                    curr_state->regs[inst.dst].min_val = 0;
-                    curr_state->regs[inst.dst].max_val = 0;
+                    curr_state->regs[inst.dst].u.min = 0;
+                    curr_state->regs[inst.dst].u.max = 0;
+                    curr_state->regs[inst.dst].s.min = 0;
+                    curr_state->regs[inst.dst].s.max = 0;
                     DEBUG("\tAssigned map %p to R%d\n", map, inst.dst);
                     break;
                 }
@@ -1391,8 +1517,10 @@ validate_accesses(const struct ubpf_vm *vm,
                     DEBUG("\tLoaded R%d from stack offset %d\n", inst.dst, stack_slot);
                 } else {
                     curr_state->regs[inst.dst].type = UNKNOWN;
-                    curr_state->regs[inst.dst].min_val = REGISTER_MIN_RANGE;
-                    curr_state->regs[inst.dst].max_val = REGISTER_MAX_RANGE;
+                    curr_state->regs[inst.dst].u.min = 0;
+                    curr_state->regs[inst.dst].u.max = UINT64_MAX;
+                    curr_state->regs[inst.dst].s.min = INT64_MIN;
+                    curr_state->regs[inst.dst].s.max = INT64_MAX;
                 }
                 break;
 
@@ -1433,7 +1561,7 @@ explore_cfg_edge(enum vertex_status *vertices, enum edge_status *edges,
             DEBUG("\tLabel PC %d as discovered\n", v);
             ret = 0;
             break;
-        default:
+        case DISCOVERED:
             *errmsg = ubpf_error("back-edge detected from PC %d to PC %d",
                                  v, u);
             ret = -1;
@@ -1464,6 +1592,7 @@ validate_cfg(const struct ebpf_inst *insts, uint32_t num_insts,
             switch (EBPF_OP(insts[v].opcode)) {
                 case EBPF_JMP_JA:
                     u += insts[v].offset;
+                    /* fall through */
                 case EBPF_JMP_CALL:
                     ret = explore_cfg_edge(vertices, edges, v, u,
                                            BRANCH1_LABELED, errmsg);
