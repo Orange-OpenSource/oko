@@ -1329,12 +1329,6 @@ validate_mem_access(struct bpf_state *state, uint8_t regno,
 
     switch (state->regs[regno].type) {
         case PKT_PTR:
-//            if (t == WRITE) {
-//                *errmsg = ubpf_error("forbidden write to packet at PC %d",
-//                                     state->instno);
-//                return false;
-//            }
-
             min_val = state->regs[regno].s.min;
             max_val = state->regs[regno].u.max;
 
