@@ -669,7 +669,22 @@ validate_reg_access(struct bpf_reg_state regs[], uint8_t regno, uint32_t instno,
 
 static bool
 is_pointer_type(enum ubpf_reg_type type) {
-    return type & (MAP_PTR | MAP_VALUE_PTR | PKT_PTR | STACK_PTR);
+    return type & (MAP_PTR | MAP_VALUE_PTR | PKT_PTR | STACK_PTR | CTX_PTR);
+}
+
+static void
+invalidate_pkt_pointers(struct bpf_state *state) {
+    unsigned int i;
+
+    for (i = 0; i < NB_REGS; i++)
+        if (state->regs[i].type == PKT_PTR)
+            mark_bpf_reg_as_unknown(&state->regs[i]);
+
+    for (i = 0; i < STACK_SIZE; i++)
+        if (state->stack[i].type == PKT_PTR)
+            mark_bpf_reg_as_unknown(&state->stack[i]);
+
+    DEBUG("\tInvalidated packet pointers\n");
 }
 
 static bool
@@ -737,12 +752,21 @@ validate_call(const struct ubpf_vm *vm, struct bpf_state *state,
             max_val = reg->u.max;
             switch (reg->type) {
                 case PKT_PTR:
-                    // FIXME: disable verifier to pass adjust_head()
-//                    if (min_val < 0 || size + max_val > state->pkt_range) {
-//                        *errmsg = ubpf_error("invalid access to packet at PC"
-//                                             " %d", state->instno);
-//                        return false;
-//                    }
+                    if (min_val < 0 || size + max_val > state->pkt_range) {
+                        *errmsg = ubpf_error("invalid access to packet (%d +"
+                                             " %d > %d) at PC %d", max_val,
+                                             size, state->pkt_range,
+                                             state->instno);
+                        return false;
+                    }
+                    break;
+
+                case CTX_PTR:
+                    if (min_val || max_val) {
+                        *errmsg = ubpf_error("invalid access to ctx at PC"
+                                             " %d", state->instno);
+                        return false;
+                    }
                     break;
 
                 case STACK_PTR:
@@ -794,8 +818,7 @@ validate_call(const struct ubpf_vm *vm, struct bpf_state *state,
                 case PKT_SIZE:
                     *errmsg = ubpf_error("invalid memory access at PC %d",
                                          state->instno);
-                    // FIXME: disable verifier to pass adjust_head()
-                    return true;
+                    return false;
             }
 
         } else {
@@ -808,6 +831,13 @@ validate_call(const struct ubpf_vm *vm, struct bpf_state *state,
         }
     }
 
+    if (func == UBPF_ADJUST_HEAD_ID) {
+        invalidate_pkt_pointers(state);
+        state->pkt_range += state->regs[2].s.min;
+        DEBUG("\tKnown pkt range has been updated to %lu (+ %d)\n",
+              state->pkt_range, state->regs[2].s.min);
+    }
+
     if (proto.ret == (MAP_VALUE_PTR | NULL_VALUE)
         && proto.arg_types[0] == MAP_PTR) {
         state->regs[0].type = proto.ret;
@@ -818,11 +848,21 @@ validate_call(const struct ubpf_vm *vm, struct bpf_state *state,
         state->regs[0].s.min = 0;
         state->regs[0].s.max = 0;
         DEBUG("\tAssigned map %p to R0\n", state->regs[1].map);
+    } else if (proto.ret == PKT_PTR) {
+        state->regs[0].type = proto.ret;
+        state->regs[0].map = NULL;
+        // Offsets from the start of pkt:
+        state->regs[0].u.min = 0;
+        state->regs[0].u.max = 0;
+        state->regs[0].s.min = 0;
+        state->regs[0].s.max = 0;
+        DEBUG("\tAssigned pkt_ptr to R0\n");
     } else {
         mark_bpf_reg_as_unknown(&state->regs[0]);
-        state->regs[0].type = proto.ret;
+        DEBUG("\tR0 marked as unknown\n");
     }
-    DEBUG("\tR0 now has type %x\n", proto.ret);
+    DEBUG("\tR0 now has type 0x%x\n", proto.ret);
+
     return true;
 }
 
@@ -1078,14 +1118,18 @@ validate_jump(struct bpf_state *s, struct bpf_state *curr_state,
                                         &curr_state->pkt_range,
                                         EBPF_OP(inst->opcode),
                                         dst_reg->u.min);
-            DEBUG("\tR%d (t=%d) may have updated range [%ld;%lu)\n", inst->src, src_reg->type, src_reg->s.min, src_reg->u.max);
+            DEBUG("\tR%d (t=%d) may have updated range [%ld;%ld] U [%lu;%lu]\n",
+                  inst->src, src_reg->type, src_reg->s.min, src_reg->s.max,
+                  src_reg->u.min, src_reg->u.max);
         } else if (src_reg->type == IMM) {
             // If type == IMM, then min == max.
             update_min_max_jump_imm(&other_branch->regs[inst->dst],
                                     &other_branch->pkt_range, dst_reg,
                                     &curr_state->pkt_range,
                                     EBPF_OP(inst->opcode), src_reg->u.min);
-            DEBUG("\tR%d (t=%d) may have updated range [%ld;%lu)\n", inst->dst, dst_reg->type, dst_reg->s.min, dst_reg->u.max);
+            DEBUG("\tR%d (t=%d) may have updated range [%ld;%ld] U [%lu;%lu]\n",
+                  inst->dst, dst_reg->type, dst_reg->s.min, dst_reg->s.max,
+                  dst_reg->u.min, dst_reg->u.max);
         } else if ((dst_reg->type == UNKNOWN || dst_reg->type == PKT_SIZE) &&
                    (src_reg->type == UNKNOWN || src_reg->type == PKT_SIZE)) {
             update_min_max_jump_reg(&other_branch->regs[inst->dst],
@@ -1093,15 +1137,21 @@ validate_jump(struct bpf_state *s, struct bpf_state *curr_state,
                                     &other_branch->pkt_range,
                                     dst_reg, src_reg, &curr_state->pkt_range,
                                     EBPF_OP(inst->opcode));
-            DEBUG("\tR%d (t=%d) may have updated range [%ld;%lu)\n", inst->dst, dst_reg->type, dst_reg->s.min, dst_reg->u.max);
-            DEBUG("\tR%d (t=%d) may have updated range [%ld;%lu)\n", inst->src, src_reg->type, src_reg->s.min, src_reg->u.max);
+            DEBUG("\tR%d (t=%d) may have updated range [%ld;%ld] U [%lu;%lu]\n",
+                  inst->dst, dst_reg->type, dst_reg->s.min, dst_reg->s.max,
+                  dst_reg->u.min, dst_reg->u.max);
+            DEBUG("\tR%d (t=%d) may have updated range [%ld;%ld] U [%lu;%lu]\n",
+                  inst->src, src_reg->type, src_reg->s.min, src_reg->s.max,
+                  src_reg->u.min, src_reg->u.max);
         }
     } else {
         update_min_max_jump_imm(&other_branch->regs[inst->dst],
                                 &other_branch->pkt_range, dst_reg,
                                 &curr_state->pkt_range,
                                 EBPF_OP(inst->opcode), inst->imm);
-        DEBUG("\tR%d (t=%d) may have updated range [%ld;%lu)\n", inst->dst, dst_reg->type, dst_reg->s.min, dst_reg->u.max);
+        DEBUG("\tR%d (t=%d) may have updated range [%ld;%ld] U [%lu;%lu]\n",
+              inst->dst, dst_reg->type, dst_reg->s.min, dst_reg->s.max,
+              dst_reg->u.min, dst_reg->u.max);
     }
 
     if (dst_reg->type == (MAP_VALUE_PTR | NULL_VALUE)
@@ -1245,7 +1295,7 @@ update_min_max_alu_op(struct bpf_reg_state regs[], struct ebpf_inst *inst) {
             dst_reg->s.min = (mask >> 1) ^ UINT64_MAX;
     }
 
-    DEBUG("\tR%d (t=%d) has updated range [%ld;%lu)\n", inst->dst, dst_reg->type, dst_reg->s.min, dst_reg->u.max);
+    DEBUG("\tR%d (t=%d) has updated range [%ld;%ld] U [%lu;%lu]\n", inst->dst, dst_reg->type, dst_reg->s.min, dst_reg->s.max, dst_reg->u.min, dst_reg->u.max);
 }
 
 static bool
@@ -1270,7 +1320,9 @@ validate_alu_op(struct bpf_state *state, struct ebpf_inst *inst,
             } else {
                 mark_bpf_reg_as_imm(dst_reg, inst->imm);
             }
-            DEBUG("\tR%d now has type %u, range [%ld;%lu)\n", inst->dst, dst_reg->type, dst_reg->s.min, dst_reg->u.max);
+            DEBUG("\tR%d now has type 0x%x, range [%ld;%ld] U [%lu;%lu]\n",
+                  inst->dst, dst_reg->type, dst_reg->s.min, dst_reg->s.max,
+                  dst_reg->u.min, dst_reg->u.max);
             break;
 
         default:
@@ -1332,13 +1384,14 @@ validate_mem_access(struct bpf_state *state, uint8_t regno,
             min_val = state->regs[regno].s.min;
             max_val = state->regs[regno].u.max;
 
-            DEBUG("\t%d + %lu + %d > %lu\n", inst->offset, max_val, size, state->pkt_range);
-//            if (inst->offset + min_val < 0
-//                || inst->offset + max_val + size > state->pkt_range) {
-//                *errmsg = ubpf_error("invalid access to packet at PC %d",
-//                                     state->instno);
-//                return false;
-//            }
+            DEBUG("\t%d + %lu + %d < %lu\n", inst->offset, max_val, size, state->pkt_range);
+            if (inst->offset + min_val < 0
+                || inst->offset + max_val + size > state->pkt_range) {
+                *errmsg = ubpf_error("invalid access to packet (%d + %d > %d)"
+                                     " at PC %d", inst->offset + max_val, size,
+                                     state->pkt_range, state->instno);
+                return false;
+            }
             break;
 
         case STACK_PTR:
@@ -1399,9 +1452,9 @@ validate_mem_access(struct bpf_state *state, uint8_t regno,
         case IMM:
         case MAP_PTR:
         case PKT_SIZE:
+        case CTX_PTR:
             *errmsg = ubpf_error("invalid memory access at PC %d", state->instno);
-            // FIXME: disable verifier to pass adjust_head()
-            return true;
+            return false;
     }
     return true;
 }
@@ -1412,7 +1465,7 @@ validate_accesses(const struct ubpf_vm *vm,
                         char **errmsg) {
     struct bpf_state *s = calloc(1, sizeof(struct bpf_state));
     ovs_list_init(&s->node);
-    s->regs[1].type = PKT_PTR;
+    s->regs[1].type = CTX_PTR;
     s->regs[2].type = PKT_SIZE;
     s->regs[2].u.max = UINT64_MAX;
     s->regs[2].u.min = 0;

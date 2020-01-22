@@ -305,8 +305,8 @@ ubpf_adjust_head(void* ctx, int offset) {
 struct ubpf_func_proto ubpf_adjust_head_proto = {
     .func = (ext_func)ubpf_adjust_head,
     .arg_types = {
-            0xff,
-            0xff,
+            CTX_PTR,
+            IMM,
             0xff,
             0xff,
             0xff,
@@ -318,7 +318,7 @@ struct ubpf_func_proto ubpf_adjust_head_proto = {
             0xff,
             0xff,
     },
-    .ret = UNKNOWN,
+    .ret = PKT_PTR,
 };
 
 void *
@@ -331,20 +331,20 @@ ubpf_packet_data(void *ctx)
 struct ubpf_func_proto ubpf_packet_data_proto = {
     .func = (ext_func)ubpf_packet_data,
     .arg_types = {
-            PKT_PTR,
+            CTX_PTR,
             0xff,
             0xff,
             0xff,
             0xff,
     },
     .arg_sizes = {
-            SIZE_PTR_MAX,
+            0xff,
             0xff,
             0xff,
             0xff,
             0xff,
     },
-    .ret = UNKNOWN,
+    .ret = PKT_PTR,
 };
 
 static uint32_t
@@ -383,7 +383,7 @@ register_functions(struct ubpf_vm *vm)
     ubpf_register_function(vm, 5, "ubpf_time_get_ns", ubpf_time_get_ns_proto);
     ubpf_register_function(vm, 6, "ubpf_hash", ubpf_hash_proto);
     ubpf_register_function(vm, 7, "ubpf_printf", ubpf_printf_proto);
-    ubpf_register_function(vm, 8, "ubpf_adjust_head", ubpf_adjust_head_proto);
+    ubpf_register_function(vm, UBPF_ADJUST_HEAD_ID, "ubpf_adjust_head", ubpf_adjust_head_proto);
     ubpf_register_function(vm, 9, "ubpf_packet_data", ubpf_packet_data_proto);
     ubpf_register_function(vm, 10, "ubpf_get_rss_hash", ubpf_get_rss_hash_proto);
 }
