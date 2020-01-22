@@ -25,6 +25,11 @@ static void *(*ubpf_adjust_head)(const void *, uint64_t) = (void *)8;
 
 void* memcpy(void* dest, const void* src, size_t len);
 
+struct vxlan_h {
+    uint32_t flags_reserved;
+    uint32_t vni_reserved;
+};
+
 /*
  * This program presents more complex example: VXLAN encapsulation. The aim is to show the VXLAN encapsulation, so the
  * outer Ethernet and IP headers are just a simple copy of inner Etherner/IP headers. In the real-world application
@@ -36,29 +41,19 @@ uint64_t entry(void *ctx, uint64_t pkt_len)
     bool pass = true;
 
     void *pkt = ubpf_packet_data(ctx);
-
-    struct ether_header *ether_header = (void *)pkt;
-    struct iphdr *iphdr = (void *)(ether_header + 1);
-
-    if (sizeof(struct ether_header) + sizeof(struct iphdr) < pkt_len) {
+    if (pkt_len < sizeof(struct ether_header) + sizeof(struct iphdr)) {
         return 1;
     }
 
-    struct vxlan_h {
-        uint32_t flags_reserved;
-        uint32_t vni_reserved;
-    };
-
     size_t head_len = sizeof(struct vxlan_h) + sizeof(struct udphdr) + sizeof(struct iphdr) + sizeof(struct ether_header);
-
     pkt = ubpf_adjust_head(ctx, head_len);
-
     struct ether_header *new_eth = (void *) pkt;
     memcpy(new_eth, (char *)new_eth + head_len, sizeof(struct ether_header));
 
     struct iphdr *new_ip = (void *)(new_eth + 1);
     memcpy(new_ip, (char *)new_eth + head_len + sizeof(struct ether_header), sizeof(struct iphdr));
     new_ip->protocol = 0x11;
+
     struct udphdr *udp = (void *)(new_ip + 1);
     udp->uh_sport = bpf_htons(5555); // random source UDP port
     udp->uh_dport = bpf_htons(4789); // VXLAN UDP port

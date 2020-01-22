@@ -27,6 +27,14 @@ static void *(*ubpf_adjust_head)(const void *, uint64_t) = (void *)8;
 
 void* memmove(void* dest, const void* src, size_t len);
 
+struct vlan_eth {
+    u_int8_t  ether_dhost[6];   /* destination eth addr */
+    u_int8_t  ether_shost[6];   /* source ether addr    */
+    uint16_t h_vlan_ethtype;
+    uint16_t h_vlan_TCI;
+    uint16_t ethtype;
+};
+
 /*
  * The example shows VLAN tagging. The BPF program replaces Ethernet header with VLAN-tagged L2 header.
  */
@@ -35,27 +43,14 @@ uint64_t entry(void *ctx, uint64_t pkt_len)
     bool pass = true;
 
     void *pkt = ubpf_packet_data(ctx);
-
-    struct ether_header *ether_header = (void *)pkt;
-    struct iphdr *iphdr = (void *)(ether_header + 1);
-
-    if (sizeof(struct ether_header) + sizeof(struct iphdr) < pkt_len) {
+    if (pkt_len < sizeof(struct ether_header) + sizeof(struct iphdr)) {
         return 1;
     }
 
-    struct vlan_eth {
-        u_int8_t  ether_dhost[6];	/* destination eth addr	*/
-        u_int8_t  ether_shost[6];	/* source ether addr	*/
-        uint16_t h_vlan_ethtype;
-        uint16_t h_vlan_TCI;
-        uint16_t ethtype;
-    };
-
     pkt = ubpf_adjust_head(ctx, VLAN_HDR_LEN);
-
     struct vlan_eth *veh = (void *) pkt;
-
     memmove(veh, (char *)veh + VLAN_HDR_LEN, 2 * ETH_ADDR_LEN);
+
     veh->h_vlan_TCI = bpf_htons(20); // set VLAN TCI=20
     veh->h_vlan_ethtype = bpf_htons(0x8100); // set EtherType to VLAN
 

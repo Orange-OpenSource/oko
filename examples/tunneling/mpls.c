@@ -24,6 +24,10 @@ static void *(*ubpf_adjust_head)(const void *, uint64_t) = (void *)8;
 
 void* memmove(void* dest, const void* src, size_t len);
 
+struct mpls_h {
+    uint32_t lse;
+};
+
 /*
  * The example shows MPLS tunneling. The BPF program inserts MPLS header in-between Ethernet and IP headers.
  */
@@ -32,23 +36,15 @@ uint64_t entry(void *ctx, uint64_t pkt_len)
     bool pass = true;
 
     void *pkt = ubpf_packet_data(ctx);
-
-    struct ether_header *ether_header = (void *)pkt;
-    struct iphdr *iphdr = (void *)(ether_header + 1);
-
-    if (sizeof(struct ether_header) + sizeof(struct iphdr) < pkt_len) {
+    if (pkt_len < sizeof(struct ether_header) + sizeof(struct iphdr)) {
         return 1;
     }
 
-    struct mpls_h {
-        uint32_t lse;
-    };
-
     // set MPLS UNICAST EtherType
+    struct ether_header *ether_header = (void *)pkt;
     ether_header->ether_type = bpf_htons(0x8847);
 
     pkt = ubpf_adjust_head(ctx, sizeof(struct mpls_h));
-
     char * header = (void *) pkt;
     memmove(header, header + sizeof(struct mpls_h), sizeof(struct ether_header));
 
