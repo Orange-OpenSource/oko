@@ -1171,7 +1171,14 @@ static inline uint64_t
 compute_bitwise_and_bound(uint64_t a, uint64_t b, unsigned int opsize) {
     a = __builtin_clzll(a);
     b = __builtin_clzll(b);
-    return ((uint64_t) -1) >> (64 - (opsize - MAX(a, b)));
+    return -1ULL >> (64 - (opsize - MAX(a, b)));
+}
+
+static inline uint64_t
+compute_bitwise_or_bound(uint64_t a, uint64_t b, unsigned int opsize) {
+    a = __builtin_clzll(a);
+    b = __builtin_clzll(b);
+    return -1ULL >> (64 - (opsize - MIN(a, b)));
 }
 
 static void
@@ -1285,6 +1292,77 @@ update_min_max_alu_op(struct bpf_reg_state regs[], struct ebpf_inst *inst) {
             } else {
                 dst_reg->s.max = mask >> 1;
                 dst_reg->s.min = (mask >> 1) ^ UINT64_MAX;
+            }
+            break;
+
+        case EBPF_ALU_OR:
+            if (dst_reg->u.min == dst_reg->u.max && src_reg.u.min == src_reg.u.max) {
+                dst_reg->u.min |= src_reg.u.min;
+                dst_reg->u.max |= src_reg.u.max;
+            } else {
+                dst_reg->u.max = compute_bitwise_or_bound(dst_reg->u.max,
+                                                           src_reg.u.max, opsize);
+                dst_reg->u.min |= src_reg.u.min;
+            }
+
+            if (dst_reg->s.min == dst_reg->s.max && src_reg.s.min == src_reg.s.max) {
+                dst_reg->s.min |= src_reg.s.min;
+                dst_reg->s.max |= src_reg.s.max;
+            } else if (dst_reg->s.min >= 0 || src_reg.s.min >= 0) {
+                dst_reg->s.max = compute_bitwise_or_bound(dst_reg->s.max & (mask >> 1),
+                                                           src_reg.s.max & (mask >> 1),
+                                                           opsize);
+                dst_reg->s.min |= src_reg.s.min;
+            } else {
+                dst_reg->s.max = mask >> 1;
+                dst_reg->s.min = (mask >> 1) ^ UINT64_MAX;
+            }
+            break;
+
+        case EBPF_ALU_LSH:
+            if (src_reg.u.max >= opsize) {
+                dst_reg->u.max = MAX(mask, nr.u.max);
+                dst_reg->u.min = 0;
+                dst_reg->s.max = mask >> 1;
+                dst_reg->s.min = (mask >> 1) ^ UINT64_MAX;
+            } else {
+                if (dst_reg->u.max <= -1ULL >> (64 - (opsize - src_reg.u.max))) {
+                    dst_reg->u.min <<= src_reg.u.min;
+                    dst_reg->u.max <<= src_reg.u.max;
+                } else {
+                    dst_reg->u.max = MAX(mask, nr.u.max);
+                    dst_reg->u.min = 0;
+                }
+
+                if (dst_reg->s.min >> (opsize - 1) == 0 &&
+                    dst_reg->s.max < ((int64_t)(-1ULL >> (64 - (opsize - src_reg.u.max - 1))))) {
+                    // bounds will remain positives so no overflows.
+                    dst_reg->s.min <<= src_reg.u.min;
+                    dst_reg->s.max <<= src_reg.u.max;
+                } else {
+                    dst_reg->s.max = mask >> 1;
+                    dst_reg->s.min = (mask >> 1) ^ UINT64_MAX;
+                }
+            }
+            break;
+
+        case EBPF_ALU_RSH:
+            if (src_reg.u.max >= opsize) {
+                dst_reg->u.max = MAX(mask, nr.u.max);
+                dst_reg->u.min = 0;
+                dst_reg->s.max = mask >> 1;
+                dst_reg->s.min = (mask >> 1) ^ UINT64_MAX;
+            } else {
+                dst_reg->u.min >>= src_reg.u.min;
+                dst_reg->u.max >>= src_reg.u.max;
+
+                if ((uint64_t)dst_reg->s.min >> (opsize - 1) == 0) {
+                    dst_reg->s.min >>= src_reg.u.min;
+                    dst_reg->s.max >>= src_reg.u.max;
+                } else {
+                    dst_reg->s.max = mask >> 1;
+                    dst_reg->s.min = (mask >> 1) ^ UINT64_MAX;
+                }
             }
             break;
 
