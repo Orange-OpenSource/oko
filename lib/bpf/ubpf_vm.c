@@ -1403,9 +1403,7 @@ validate_alu_op(struct bpf_state *state, struct ebpf_inst *inst,
                   dst_reg->u.min, dst_reg->u.max);
             break;
 
-        default:
-            update_min_max_alu_op(state->regs, inst);
-
+        default: {
             uint8_t op = EBPF_OP(inst->opcode);
             if ((op == EBPF_ALU_SUB || op == EBPF_ALU_ADD)
                 && dst_reg->type == STACK_PTR
@@ -1428,6 +1426,9 @@ validate_alu_op(struct bpf_state *state, struct ebpf_inst *inst,
                                      state->instno);
                 return false;
             }
+
+            update_min_max_alu_op(state->regs, inst);
+        }
     }
 
     return true;
