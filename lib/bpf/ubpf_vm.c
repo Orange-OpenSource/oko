@@ -1613,7 +1613,7 @@ validate_accesses(const struct ubpf_vm *vm,
                 if (!validate_reg_access(curr_state->regs, inst.dst,
                                          curr_state->instno, WRITE, errmsg))
                     return false;
-                if (inst.opcode == EBPF_OP_LDDW) {
+                if (inst.opcode == EBPF_OP_LDDW && inst.src == BPF_PSEUDO_MAP_FD) {
                     // Skip next instruction and remember map address:
                     struct ubpf_map *map;
                     curr_state->instno++;
@@ -1641,11 +1641,21 @@ validate_accesses(const struct ubpf_vm *vm,
                     curr_state->regs[inst.dst] = curr_state->stack[stack_slot];
                     DEBUG("\tLoaded R%d from stack offset %d\n", inst.dst, stack_slot);
                 } else {
-                    curr_state->regs[inst.dst].type = UNKNOWN;
-                    curr_state->regs[inst.dst].u.min = 0;
-                    curr_state->regs[inst.dst].u.max = UINT64_MAX;
-                    curr_state->regs[inst.dst].s.min = INT64_MIN;
-                    curr_state->regs[inst.dst].s.max = INT64_MAX;
+                    uint64_t val = inst.imm;
+                    if (inst.opcode == EBPF_OP_LDDW) {
+                        val |= ((uint64_t)insts[curr_state->instno + 1].imm << 32);
+                    }
+                    curr_state->regs[inst.dst].type = IMM;
+                    curr_state->regs[inst.dst].s.min = val;
+                    curr_state->regs[inst.dst].s.max = val;
+                    curr_state->regs[inst.dst].u.min = val;
+                    curr_state->regs[inst.dst].u.max = val;
+                    curr_state->regs[inst.dst].map = NULL;
+                    DEBUG("\tR%d now has type IMM, value %ld (%lu)\n", inst.dst, (int64_t)val, val);
+                }
+                if (inst.opcode == EBPF_OP_LDDW) {
+                    // Skip next instruction.
+                    curr_state->instno++;
                 }
                 break;
 

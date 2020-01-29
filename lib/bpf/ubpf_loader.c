@@ -304,8 +304,11 @@ ubpf_load_elf(struct ubpf_vm *vm, const void *elf, size_t elf_size, char **errms
                         }
                     }
 
-                    *(uint32_t *)((uint64_t)text_copy + r->r_offset + 4) = (uint32_t)((uint64_t)map);
-                    *(uint32_t *)((uint64_t)text_copy + r->r_offset + sizeof(struct ebpf_inst) + 4) = (uint32_t)((uint64_t)map >> 32);
+                    struct ebpf_inst *inst1 = text_copy + r->r_offset;
+                    inst1->src = BPF_PSEUDO_MAP_FD;
+                    inst1->imm = (uint32_t)((uint64_t)map);
+                    struct ebpf_inst *inst2 = inst1 + 1;
+                    inst2->imm = (uint32_t)((uint64_t)map >> 32);
 
                 } else if (sym_shndx == str_shndx) {
                     if (!str_shndx) {

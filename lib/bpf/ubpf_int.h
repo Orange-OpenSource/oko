@@ -26,6 +26,7 @@
 #define NB_FUNC_ARGS 5
 #define MAX_SIZE_ARG 8
 #define UBPF_ADJUST_HEAD_ID 8
+#define BPF_PSEUDO_MAP_FD 1
 
 struct ebpf_inst;
 typedef uint64_t (*ext_func)(uint64_t arg0, uint64_t arg1, uint64_t arg2, uint64_t arg3, uint64_t arg4);
